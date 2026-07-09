@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StainScan - Admin Web Portal</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap"
+        rel="stylesheet">
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body class="admin-portal-body">
+    <!-- 1. ADMIN AUTH GATE (If not logged in) -->
+    <div id="admin-auth-container" class="admin-auth-wrap active">
+        <div class="auth-card active">
+            <div class="auth-header">
+                <div class="auth-logo orange-theme">
+                    <i class="fas fa-user-shield"></i>
+                </div>
+                <h2>StainScan Admin</h2>
+                <p>System Administrator Web Console</p>
+            </div>
+            <form id="adminLoginForm">
+                <div class="form-group">
+                    <label for="admin-email">Admin Email</label>
+                    <div class="input-wrapper">
+                        <i class="far fa-envelope"></i>
+                        <input type="email" id="admin-email" required placeholder="admin@stainscan.com">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="admin-password">Password</label>
+                    <div class="input-wrapper">
+                        <i class="fas fa-lock"></i>
+                        <input type="password" id="admin-password" required placeholder="••••••••">
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block btn-orange">
+                    <span>Unlock Admin Console</span>
+                    <i class="fas fa-arrow-right"></i>
+                </button>
+            </form>
+            <div class="auth-footer">
+                <p>Access restricted to authorized personnel only.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. MAIN ADMIN PORTAL PANEL (Hidden initially) -->
+    <div id="admin-main-container" class="admin-portal-frame" style="display: none;">
+        <!-- Left Sidebar Navigation -->
+        <aside class="admin-sidebar">
+            <div class="sidebar-logo">
+                <i class="fas fa-user-shield text-admin"></i>
+                <h2>Stain<span>Admin</span></h2>
+            </div>
+            <nav class="sidebar-menu">
+                <button class="menu-item active" data-tab="admin-overview">
+                    <i class="fas fa-chart-line"></i>
+                    <span>Overview & Stats</span>
+                </button>
+                <button class="menu-item" data-tab="admin-users-list">
+                    <i class="fas fa-users-gear"></i>
+                    <span>User Accounts</span>
+                </button>
+                <button class="menu-item" data-tab="admin-recipe-editor">
+                    <i class="fas fa-book-open"></i>
+                    <span>Recipe Editor</span>
+                </button>
+                <button class="menu-item" data-tab="admin-audit-logs">
+                    <i class="fas fa-bug"></i>
+                    <span>Audit Logs</span>
+                </button>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="admin-user-info">
+                    <img id="sidebarAvatar" src="https://api.dicebear.com/7.x/bottts/svg?seed=admin" alt="Admin">
+                    <div class="admin-meta-text">
+                        <h4 id="sidebarAdminName">Admin Manager</h4>
+                        <span>System Root</span>
+                    </div>
+                </div>
+                <button class="btn-sidebar-logout" id="btnAdminLogout" title="Log Out">
+                    <i class="fas fa-power-off"></i>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Right Main Content Area -->
+        <main class="admin-content-area">
+            <!-- Top Dashboard Header -->
+            <header class="admin-dashboard-header">
+                <div class="header-titles">
+                    <span class="breadcrumb">StainScan Control Console</span>
+                    <h1 id="adminTabTitle">Overview & Analytics</h1>
+                </div>
+                <div class="header-actions">
+                    <span class="live-status-pulse"><span class="pulse-dot"></span> Real-time Sync Active</span>
+                    <span class="current-date-badge" id="currentDateBadge">July 7, 2026</span>
+                </div>
+            </header>
+
+            <!-- Tabs Render Section -->
+            <div class="admin-panes-container">
+
+                <!-- A. OVERVIEW PANEL -->
+                <section id="admin-overview" class="admin-pane active">
+                    <!-- Metric Cards Grid -->
+                    <div class="metrics-grid">
+                        <div class="metric-block">
+                            <div class="block-icon bg-orange"><i class="fas fa-mobile-screen-button"></i></div>
+                            <div class="block-details">
+                                <span class="lbl">Registered Mobile Users</span>
+                                <h2 id="totalUsersCount">0</h2>
+                            </div>
+                        </div>
+                        <div class="metric-block">
+                            <div class="block-icon bg-violet"><i class="fas fa-magnifying-glass-chart"></i></div>
+                            <div class="block-details">
+                                <span class="lbl">Total CNN Scans Run</span>
+                                <h2 id="totalScansCount">0</h2>
+                            </div>
+                        </div>
+                        <div class="metric-block">
+                            <div class="block-icon bg-emerald"><i class="fas fa-circle-check"></i></div>
+                            <div class="block-details">
+                                <span class="lbl">Successful Treatments</span>
+                                <h2 id="totalTreatedCount">0</h2>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Charts row -->
+                    <div class="dashboard-rows-grid">
+                        <div class="dashboard-card">
+                            <div class="card-title-row">
+                                <h3>Stain Classifications Distribution</h3>
+                                <p>Ratio of identified fabric stains logged by the mobile application.</p>
+                            </div>
+                            <div class="simple-bar-chart" id="adminStainChart">
+                                <!-- Dynamic bars rendering -->
+                            </div>
+                        </div>
+
+                        <div class="dashboard-card">
+                            <div class="card-title-row">
+                                <h3>CNN Image Model Metrics</h3>
+                                <p>Accuracy profiles of convolution filter models.</p>
+                            </div>
+                            <div class="metrics-list">
+                                <div class="metric-item">
+                                    <span>Mud Classification Accuracy</span>
+                                    <strong>94.2%</strong>
+                                </div>
+                                <div class="metric-item">
+                                    <span>Used Cooking Oil Accuracy</span>
+                                    <strong>91.8%</strong>
+                                </div>
+                                <div class="metric-item">
+                                    <span>Black Ballpen Ink Accuracy</span>
+                                    <strong>88.5%</strong>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- B. USERS LIST PANEL -->
+                <section id="admin-users-list" class="admin-pane">
+                    <div class="dashboard-card pad-none">
+                        <div class="card-title-row pad-20">
+                            <h3>Mobile User Directory</h3>
+                            <p>Manage accounts authorized to log scan results.</p>
+                        </div>
+                        <div class="table-container">
+                            <table class="admin-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Email Address</th>
+                                        <th>System Role</th>
+                                        <th>Registered Date</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="usersTableBody">
+                                    <!-- Injected by js -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- C. RECIPE EDITOR PANEL -->
+                <section id="admin-recipe-editor" class="admin-pane">
+                    <div class="dashboard-card max-width-800">
+                        <div class="card-title-row">
+                            <h3>Configure Knowledge Base Cleaning Recipes</h3>
+                            <p>Update steps and materials lists for the 3 target stain classifications. Updates will
+                                propagate immediately to user mobile apps.</p>
+                        </div>
+
+                        <div class="recipe-editor-form">
+                            <div class="form-group">
+                                <label for="recipeStainSelect">Stain Classification</label>
+                                <select id="recipeStainSelect" class="form-select">
+                                    <option value="Used Cooking Oil">Used Cooking Oil</option>
+                                    <option value="Black Ballpen Ink">Black Ballpoint Pen Ink</option>
+                                    <option value="Mud">Mud</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="recipeMaterials">Required Materials (comma separated)</label>
+                                <textarea id="recipeMaterials" class="form-textarea" rows="2"
+                                    placeholder="e.g. Liquid soap, Warm water, Cloth"></textarea>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="recipeSteps">Cleaning Steps (one instruction per line)</label>
+                                <textarea id="recipeSteps" class="form-textarea" rows="8"
+                                    placeholder="Step 1...&#10;Step 2..."></textarea>
+                            </div>
+
+                            <button class="btn btn-primary btn-orange" id="btnSaveRecipe">
+                                <i class="fas fa-floppy-disk"></i>
+                                <span>Save Changes & Sync</span>
+                            </button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- D. AUDIT LOGS PANEL -->
+                <section id="admin-audit-logs" class="admin-pane">
+                    <div class="dashboard-card pad-none">
+                        <div class="card-title-row pad-20">
+                            <div class="logs-header-title">
+                                <h3>Audit Trails & Warning Logs</h3>
+                                <p>Monitors image analysis failures, low-light flags, and user access records.</p>
+                            </div>
+                            <button class="btn btn-secondary btn-small-danger" id="btnClearLogs">
+                                <i class="far fa-trash-can"></i>
+                                <span>Clear History Log</span>
+                            </button>
+                        </div>
+                        <div class="logs-box-full" id="logsContainer">
+                            <!-- Injected by js -->
+                        </div>
+                    </div>
+                </section>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Admin JavaScript -->
+    <script src="admin.js?v=2.1"></script>
+</body>
+
+</html>

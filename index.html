@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StainScan Mobile App</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Main App Container mimicking a mobile screen layout on desktop -->
+    <div class="app-frame">
+        <div class="app-device">
+            <!-- Screen Notch / Status Bar decoration -->
+            <div class="device-status-bar">
+                <span class="status-time" id="statusTime">09:41</span>
+                <div class="status-icons">
+                    <i class="fas fa-signal"></i>
+                    <i class="fas fa-wifi"></i>
+                    <i class="fas fa-battery-three-quarters"></i>
+                </div>
+            </div>
+
+            <!-- Top Header (hidden in Auth screen) -->
+            <header class="app-header" id="appHeader">
+                <div class="header-logo">
+                    <div class="logo-icon-wrap">
+                        <i class="fas fa-wand-magic-sparkles logo-glow"></i>
+                    </div>
+                    <h1>Stain<span>Scan</span></h1>
+                </div>
+                <button class="profile-btn" id="headerProfileBtn" title="View Profile">
+                    <img id="headerAvatar" src="https://api.dicebear.com/7.x/bottts/svg?seed=John" alt="Avatar">
+                </button>
+            </header>
+
+            <!-- Screens Wrapper -->
+            <main class="app-content">
+                
+                <!-- 1. AUTH SCREEN (Login/Register/Recovery) -->
+                <section id="screen-auth" class="app-screen active">
+                    <div class="auth-wrapper">
+                        <div class="auth-header">
+                            <div class="auth-logo">
+                                <i class="fas fa-wand-magic-sparkles"></i>
+                            </div>
+                            <h2>StainScan Mobile</h2>
+                            <p id="auth-subtitle">AI-Powered Cotton Fabric Stain Care</p>
+                        </div>
+
+                        <!-- Login Form -->
+                        <div id="auth-login-card" class="auth-card active">
+                            <form id="loginForm">
+                                <div class="form-group">
+                                    <label for="login-email">Email Address</label>
+                                    <div class="input-wrapper">
+                                        <i class="far fa-envelope"></i>
+                                        <input type="email" id="login-email" required placeholder="name@email.com">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="login-password">Password</label>
+                                    <div class="input-wrapper">
+                                        <i class="fas fa-lock"></i>
+                                        <input type="password" id="login-password" required placeholder="••••••••">
+                                    </div>
+                                </div>
+                                <div class="auth-actions">
+                                    <button type="button" class="text-link" id="btnGoForgot">Forgot Password?</button>
+                                </div>
+                                <button type="submit" class="btn btn-primary btn-block">
+                                    <span>Sign In</span>
+                                    <i class="fas fa-arrow-right"></i>
+                                </button>
+                            </form>
+                            <div class="auth-footer">
+                                <p>Don't have an account? <button class="text-link" id="btnGoRegister">Sign Up</button></p>
+                            </div>
+                        </div>
+
+                        <!-- Register Form -->
+                        <div id="auth-register-card" class="auth-card">
+                            <form id="registerForm">
+                                <div class="form-group">
+                                    <label for="reg-name">Full Name</label>
+                                    <div class="input-wrapper">
+                                        <i class="far fa-user"></i>
+                                        <input type="text" id="reg-name" required placeholder="John Doe">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="reg-email">Email Address</label>
+                                    <div class="input-wrapper">
+                                        <i class="far fa-envelope"></i>
+                                        <input type="email" id="reg-email" required placeholder="name@email.com">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="reg-password">Password</label>
+                                    <div class="input-wrapper">
+                                        <i class="fas fa-lock"></i>
+                                        <input type="password" id="reg-password" required placeholder="Min 6 characters">
+                                    </div>
+                                </div>
+                                <div class="form-group checkbox-group">
+                                    <input type="checkbox" id="reg-terms" required>
+                                    <label for="reg-terms">I agree to the Terms & Privacy Policy</label>
+                                </div>
+                                <button type="submit" class="btn btn-primary btn-block">
+                                    <span>Create Account</span>
+                                    <i class="fas fa-user-plus"></i>
+                                </button>
+                            </form>
+                            <div class="auth-footer">
+                                <p>Already have an account? <button class="text-link" id="btnGoLogin">Sign In</button></p>
+                            </div>
+                        </div>
+
+                        <!-- Recovery Form -->
+                        <div id="auth-recovery-card" class="auth-card">
+                            <form id="recoveryForm">
+                                <p class="card-info-text">Enter your email address and we'll send you instructions to reset your password.</p>
+                                <div class="form-group">
+                                    <label for="recover-email">Email Address</label>
+                                    <div class="input-wrapper">
+                                        <i class="far fa-envelope"></i>
+                                        <input type="email" id="recover-email" required placeholder="name@email.com">
+                                    </div>
+                                </div>
+                                <button type="submit" class="btn btn-primary btn-block">
+                                    <span>Send Reset Link</span>
+                                    <i class="fas fa-paper-plane"></i>
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-block" id="btnBackToLogin">
+                                    <span>Back to Login</span>
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 2. DASHBOARD SCREEN -->
+                <section id="screen-dashboard" class="app-screen">
+                    <div class="dashboard-wrap">
+                        <!-- Greeting -->
+                        <div class="user-greeting">
+                            <h2>Hello, <span id="dashboardUserName">User</span> 👋</h2>
+                            <p>Let's save your cotton fabrics today.</p>
+                        </div>
+
+                        <!-- Fast Scan Banner Card -->
+                        <div class="scan-banner">
+                            <div class="banner-content">
+                                <h3>Identify Stains Instantly</h3>
+                                <p>Scan cotton garments to identify Mud, Cooking Oil, or Pen Ink and get cleaning recipes.</p>
+                                <button class="btn btn-white" id="btnQuickScan">
+                                    <i class="fas fa-camera"></i>
+                                    <span>Start Scanning</span>
+                                </button>
+                            </div>
+                            <div class="banner-illustration">
+                                <i class="fas fa-magnifying-glass-chart"></i>
+                            </div>
+                        </div>
+
+                        <!-- Quick Statistics -->
+                        <div class="stats-row">
+                            <div class="stat-card">
+                                <div class="stat-icon orange"><i class="fas fa-clock-rotate-left"></i></div>
+                                <div class="stat-info">
+                                    <span class="stat-value" id="statTotalScans">0</span>
+                                    <span class="stat-label">Total Scans</span>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon green"><i class="fas fa-shield-halved"></i></div>
+                                <div class="stat-info">
+                                    <span class="stat-value" id="statSavedGarments">0</span>
+                                    <span class="stat-label">Stains Treated</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Recents Section -->
+                        <div class="section-header">
+                            <h3>Recent Activity</h3>
+                            <button class="text-link" id="btnViewAllHistory">View All</button>
+                        </div>
+                        <div class="recent-scans-list" id="dashboardRecentList">
+                            <div class="empty-state">
+                                <i class="fas fa-folder-open"></i>
+                                <p>No scans performed yet. Try scanning a stain!</p>
+                            </div>
+                        </div>
+
+                        <!-- Pro Tips Card -->
+                        <div class="pro-tips-card">
+                            <div class="tip-icon"><i class="far fa-lightbulb"></i></div>
+                            <div class="tip-content">
+                                <h4>Pro Tip for Cotton Fabrics</h4>
+                                <p>Always treat stains as early as possible. Fresh stains are significantly easier to extract than dried-in stains.</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 3. SCAN/CAMERA SCREEN -->
+                <section id="screen-scan" class="app-screen">
+                    <div class="scan-wrap">
+                        <div class="section-title-wrap">
+                            <h2>Analyze Fabric Stain</h2>
+                            <p>Upload a clear photo of your stained cotton garment.</p>
+                        </div>
+
+                        <!-- Image Upload Area -->
+                        <div class="upload-area" id="dropArea">
+                            <input type="file" id="fileInput" accept="image/*" class="file-hidden-input">
+                            <div class="upload-empty-state" id="uploadEmptyState">
+                                <div class="upload-icon-pulse">
+                                    <i class="fas fa-cloud-arrow-up"></i>
+                                </div>
+                                <h3>Tap to Select Photo</h3>
+                                <p>Or drag and drop image here</p>
+                                <span class="upload-limits">JPG, PNG up to 10MB (Cotton Fabrics)</span>
+                            </div>
+                            <div class="upload-preview-state" id="uploadPreviewState" style="display: none;">
+                                <img id="uploadedImagePreview" src="" alt="Garment Preview">
+                                <button class="btn-clear-preview" id="btnClearPreview" title="Remove Photo">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                                <div class="scan-overlay-line" id="scanOverlayLine" style="display: none;"></div>
+                            </div>
+                        </div>
+
+                        <!-- Analysis Action / Controls -->
+                        <div class="scan-controls" id="scanControls" style="display: none;">
+                            <button class="btn btn-primary btn-block" id="btnAnalyzeStain">
+                                <i class="fas fa-wand-magic-sparkles"></i>
+                                <span>Begin Intelligent CNN Analysis</span>
+                            </button>
+                        </div>
+
+                        <!-- Scanner Loader (Simulating pre-processing / feature extraction) -->
+                        <div class="scanner-loader-container" id="scannerLoader" style="display: none;">
+                            <div class="glass-loader">
+                                <div class="pulse-ring"></div>
+                                <div class="cortex-spinner"></div>
+                                <h3 id="loaderStatusText">Preprocessing Image...</h3>
+                                <p id="loaderSubtext">Reducing background noise and resizing fabric details</p>
+                                <div class="progress-bar-wrap">
+                                    <div class="progress-bar-fill" id="progressBarFill"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Analysis Results Card -->
+                        <div class="results-card" id="resultsCard" style="display: none;">
+                            <div class="results-badge"><i class="fas fa-check-circle"></i> Detection Successful</div>
+                            
+                            <div class="result-details">
+                                <div class="result-detail-item">
+                                    <span class="detail-label">Stain Classification</span>
+                                    <span class="detail-val highlight" id="resultStainType">Used Cooking Oil</span>
+                                </div>
+                                <div class="result-detail-item">
+                                    <span class="detail-label">Fabric Material</span>
+                                    <span class="detail-val" id="resultFabricType">Cotton Fabric (100%)</span>
+                                </div>
+                                <div class="result-detail-item">
+                                    <span class="detail-label">CNN Confidence</span>
+                                    <div class="confidence-indicator">
+                                        <span class="detail-val" id="resultConfidence">85%</span>
+                                        <div class="confidence-track">
+                                            <div class="confidence-bar" id="resultConfidenceBar" style="width: 85%;"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="safety-warning-banner" id="safetyBanner">
+                                <i class="fas fa-shield-heart"></i>
+                                <span>Fabric Safety: Verified safe to treat using water-based/neutral methods.</span>
+                            </div>
+
+                            <div class="results-actions">
+                                <button class="btn btn-primary btn-block" id="btnViewCleaningGuide">
+                                    <span>View Cleaning Guide</span>
+                                    <i class="fas fa-chevron-right"></i>
+                                </button>
+                                <button class="btn btn-secondary btn-block" id="btnRestartScan">
+                                    <i class="fas fa-rotate-left"></i>
+                                    <span>Scan Another Garment</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 4. HISTORY SCREEN -->
+                <section id="screen-history" class="app-screen">
+                    <div class="history-wrap">
+                        <div class="section-title-wrap">
+                            <h2>Scan History Log</h2>
+                            <p>Review and track your previous stain treatment plans.</p>
+                        </div>
+
+                        <!-- Filter and Search -->
+                        <div class="history-controls">
+                            <div class="search-box">
+                                <i class="fas fa-magnifying-glass"></i>
+                                <input type="text" id="historySearch" placeholder="Search stains or fabric...">
+                            </div>
+                            <div class="filter-chips">
+                                <button class="chip active" data-filter="all">All</button>
+                                <button class="chip" data-filter="Used Cooking Oil">Oil</button>
+                                <button class="chip" data-filter="Black Ballpen Ink">Ink</button>
+                                <button class="chip" data-filter="Mud">Mud</button>
+                            </div>
+                        </div>
+
+                        <!-- History List -->
+                        <div class="history-list" id="historyListContainer">
+                            <!-- Injected by JS -->
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 5. PROFILE SCREEN -->
+                <section id="screen-profile" class="app-screen">
+                    <div class="profile-wrap">
+                        <div class="profile-card-top">
+                            <div class="profile-avatar-wrap">
+                                <img id="profileAvatar" src="https://api.dicebear.com/7.x/bottts/svg?seed=John" alt="Avatar">
+                                <button class="btn-avatar-edit" id="btnChangeAvatar" title="Change Avatar"><i class="fas fa-pen"></i></button>
+                            </div>
+                            <h3 id="profileName">John Doe</h3>
+                            <p id="profileEmail">john.doe@email.com</p>
+                        </div>
+
+                        <div class="settings-list">
+                            <h4>Account Options</h4>
+                            <div class="settings-item" id="btnEditProfile">
+                                <div class="settings-item-label">
+                                    <i class="far fa-user-circle"></i>
+                                    <span>Edit Personal Details</span>
+                                </div>
+                                <i class="fas fa-chevron-right"></i>
+                            </div>
+                            <div class="settings-item" id="btnChangePassword">
+                                <div class="settings-item-label">
+                                    <i class="fas fa-lock-open"></i>
+                                    <span>Change Password</span>
+                                </div>
+                                <i class="fas fa-chevron-right"></i>
+                            </div>
+
+                            <h4>System Settings</h4>
+                            <div class="settings-item">
+                                <div class="settings-item-label">
+                                    <i class="far fa-bell"></i>
+                                    <span>Notification Alerts</span>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <button class="btn btn-logout btn-block" id="btnLogout">
+                            <i class="fas fa-power-off"></i>
+                            <span>Sign Out</span>
+                        </button>
+                    </div>
+                </section>
+            </main>
+
+            <!-- Bottom Navigation Bar (hidden in Auth screen) -->
+            <nav class="app-nav-bar" id="appNavBar" style="display: none;">
+                <button class="nav-item active" data-screen="screen-dashboard">
+                    <i class="fas fa-house-chimney"></i>
+                    <span>Home</span>
+                </button>
+                <button class="nav-item" data-screen="screen-scan">
+                    <div class="scan-nav-circle">
+                        <i class="fas fa-camera"></i>
+                    </div>
+                    <span>Scan</span>
+                </button>
+                <button class="nav-item" data-screen="screen-history">
+                    <i class="fas fa-clock-rotate-left"></i>
+                    <span>History</span>
+                </button>
+                <button class="nav-item" data-screen="screen-profile">
+                    <i class="fas fa-user-circle"></i>
+                    <span>Profile</span>
+                </button>
+            </nav>
+        </div>
+
+        <!-- Float Simulation Control Panel -->
+        <div class="simulation-panel" id="simulationPanel">
+            <div class="sim-header">
+                <h3><i class="fas fa-gear"></i> CNN Prototype Controller</h3>
+                <button class="btn-toggle-sim" id="btnToggleSim" title="Minimize Panel"><i class="fas fa-minus"></i></button>
+            </div>
+            <div class="sim-body" id="simBody">
+                <p class="sim-desc">Use this to simulate scanning different stains and configure custom AI output results.</p>
+                <div class="form-group">
+                    <label for="sim-stain">Simulated Stain Classification</label>
+                    <select id="sim-stain" class="form-select">
+                        <option value="live" selected>Live trained CNN Model</option>
+                        <option value="Used Cooking Oil">Used Cooking Oil</option>
+                        <option value="Black Ballpen Ink">Black Ballpoint Pen Ink</option>
+                        <option value="Mud">Mud</option>
+                        <option value="Unknown Stain">Unknown/Unsupported Stain</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="sim-fabric">Simulated Fabric Classification</label>
+                    <select id="sim-fabric" class="form-select">
+                        <option value="Cotton Fabric (100%)">Cotton Fabric (100%)</option>
+                        <option value="Polyester Mix">Polyester Mix (Unsupported)</option>
+                        <option value="Silk Fabric">Silk Fabric (Unsupported)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="sim-confidence">Simulated Confidence Score (%)</label>
+                    <input type="number" id="sim-confidence" class="form-input" min="30" max="100" value="86">
+                </div>
+                <div class="form-group">
+                    <label for="sim-error-trigger">Simulate Scan Failures</label>
+                    <select id="sim-error-trigger" class="form-select">
+                        <option value="none">No Error (Successful Scan)</option>
+                        <option value="low_light">Low Light Alert (Try again)</option>
+                        <option value="blurry">Blurry Image Alert (Try again)</option>
+                        <option value="network_error">Backend CNN Timeout</option>
+                    </select>
+                </div>
+                <div class="sim-info-badge">
+                    <i class="fas fa-circle-info"></i>
+                    <span>Configure values here before clicking "Begin Intelligent CNN Analysis" in the Scan tab.</span>
+                </div>
+                <button type="button" class="btn btn-secondary btn-block" id="btnClearStorage" style="margin-top: 10px; background-color: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.2); color: #ef4444;">
+                    <i class="far fa-trash-can"></i>
+                    <span>Reset Browser Storage</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Recommendations Detailed Checklist Modal -->
+        <div class="guide-modal-overlay" id="guideModal" style="display: none;">
+            <div class="guide-modal-card">
+                <div class="guide-modal-header">
+                    <h3 id="modalStainName">Used Cooking Oil Removal Guide</h3>
+                    <button class="btn-close-modal" id="btnCloseModal" title="Close Guide"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="guide-modal-body">
+                    <div class="fabric-safety-status-modal">
+                        <i class="fas fa-shield-halved"></i>
+                        <span>Approved Treatment Plan for <strong>Cotton Fabric</strong></span>
+                    </div>
+
+                    <h4>Required Materials</h4>
+                    <ul class="materials-list-chips" id="modalMaterialsList">
+                        <!-- Chips injected by JS -->
+                    </ul>
+
+                    <h4>Interactive Cleaning Steps</h4>
+                    <p class="guide-step-tip">Check off steps as you complete them to track your treatment progress.</p>
+                    
+                    <div class="interactive-steps-container" id="modalStepsList">
+                        <!-- Checklist items injected by JS -->
+                    </div>
+
+                    <div class="progress-footer-row">
+                        <span>Garment Restoration Progress</span>
+                        <strong id="modalProgressPercent">0%</strong>
+                    </div>
+                    <div class="modal-progress-bar">
+                        <div class="modal-progress-bar-fill" id="modalProgressBarFill" style="width: 0%;"></div>
+                    </div>
+                </div>
+                <div class="guide-modal-footer">
+                    <button class="btn btn-secondary" id="btnCancelModal">Close Guide</button>
+                    <button class="btn btn-primary" id="btnCompleteTreatment">
+                        <i class="fas fa-circle-check"></i>
+                        <span>Mark Treatment Completed</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Edit Profile Modal -->
+        <div class="guide-modal-overlay" id="editProfileModal" style="display: none;">
+            <div class="guide-modal-card">
+                <div class="guide-modal-header">
+                    <h3>Edit Personal Details</h3>
+                    <button class="btn-close-modal" id="btnCloseEditProfileModal" title="Close"><i class="fas fa-times"></i></button>
+                </div>
+                <form id="editProfileForm">
+                    <div class="guide-modal-body">
+                        <div class="form-group">
+                            <label for="edit-profile-name">Full Name</label>
+                            <div class="input-wrapper">
+                                <i class="far fa-user"></i>
+                                <input type="text" id="edit-profile-name" required placeholder="John Doe">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-profile-email">Email Address</label>
+                            <div class="input-wrapper">
+                                <i class="far fa-envelope"></i>
+                                <input type="email" id="edit-profile-email" required placeholder="name@email.com">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="guide-modal-footer">
+                        <button type="button" class="btn btn-secondary" id="btnCancelEditProfile">Cancel</button>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-save"></i>
+                            <span>Save Changes</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Change Password Modal -->
+        <div class="guide-modal-overlay" id="changePasswordModal" style="display: none;">
+            <div class="guide-modal-card">
+                <div class="guide-modal-header">
+                    <h3>Change Password</h3>
+                    <button class="btn-close-modal" id="btnCloseChangePasswordModal" title="Close"><i class="fas fa-times"></i></button>
+                </div>
+                <form id="changePasswordForm">
+                    <div class="guide-modal-body">
+                        <div class="form-group">
+                            <label for="old-password">Current Password</label>
+                            <div class="input-wrapper">
+                                <i class="fas fa-lock"></i>
+                                <input type="password" id="old-password" required placeholder="••••••••">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="new-password">New Password</label>
+                            <div class="input-wrapper">
+                                <i class="fas fa-lock"></i>
+                                <input type="password" id="new-password" required placeholder="Min 6 characters">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="guide-modal-footer">
+                        <button type="button" class="btn btn-secondary" id="btnCancelChangePassword">Cancel</button>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-key"></i>
+                            <span>Update Password</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- App JavaScript -->
+    <script src="app.js?v=2.3"></script>
+</body>
+</html>

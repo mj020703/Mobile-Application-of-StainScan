@@ -1,0 +1,30 @@
+Objectives of the System
+The main objective of the system is to develop a reliable, intelligent, and userfriendly mobile application called StainScan that uses Convolutional Neural Networks
+(CNNs) and image recognition technology to identify common stains on cotton fabrics and
+provide safe, effective, and accurate stain-removal recommendations. 
+
+Specific Objectives of the System
+1. To develop a mobile application featuring a user-friendly interface that allows users to
+upload images of stained cotton fabrics for identification and cleaning assistance. 2. To implement and evaluate a Convolutional Neural Network (CNN)-based image
+recognition model to accurately classify common fabric stains such as:
+a. used cooking oil, b.black ballpoint pen ink and;
+c. mud
+3. To provide appropriate stain-removal recommendations based on the identified stain
+type to guide users toward safer, more informed cleaning decisions. 4. To prevent fabric damage, discoloration, and permanent staining by helping users avoid
+improper or ineffective cleaning methods. 5. To optimize cleaning efficiency by minimizing the waste of water, detergent, time, and
+manual effort (such as excessive scrubbing or repeated washing).To modernize
+traditional stain-removal practices through the integration of image recognition
+and machine learning technologies in consumer-level fabric care.
+
+Scope and Limitations of the System
+This system focuses on the design and development of StainScan, a mobile
+application that uses Convolutional Neural Networks (CNNs) and image recognition
+technology to identify stains from uploaded images of cotton fabrics. The system is
+intended for households, laundry workers, students, and general users who need guidance
+in stain removal. The study covers the development period for Academic Year 2025–2026
+STI West Negros University 9
+The main features of the proposed system includes user registration and login, image upload, stain classification, scan history, and recommendation of stain-removal
+procedures based on the identified stain type. The system is limited to selected stain categories only, specifically; used cooking
+oil, black ballpoint pen ink, and mud. It is also limited to cotton fabric only. The accuracy
+of the system may be affected by image quality, lighting conditions, camera resolution, stain visibility, and similarity between stain appearances. The system does not guarantee
+complete stain removal, as actual results may vary depending on stain age, amount of stain, cleaning materials used, and user application of the recommended procedure.
