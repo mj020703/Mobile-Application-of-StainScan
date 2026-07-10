@@ -10,9 +10,7 @@ const CONFIG = {
 
 class AdminDataStore {
     static getApiUrl(endpoint) {
-        const isLocalHost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-        const base = isLocalHost ? `http://localhost:5000` : CONFIG.API_BASE_URL;
-        return `${base}${endpoint}`;
+        return `${CONFIG.API_BASE_URL}${endpoint}`;
     }
 
     static async init() {

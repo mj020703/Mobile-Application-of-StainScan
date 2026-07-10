@@ -50,12 +50,7 @@ const defaultKnowledgeBase = {
 // --- Live Cloud API Integration Datastore ---
 class DataStore {
     static getApiUrl(endpoint) {
-        const isLocalHost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-        const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-        const base = (isLocalHost && !isMobileDevice) 
-            ? `http://localhost:5000` 
-            : CONFIG.API_BASE_URL;
-        return `${base}${endpoint}`;
+        return `${CONFIG.API_BASE_URL}${endpoint}`;
     }
 
     static async init() {
@@ -533,14 +528,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // Contact live prediction server if "live" mode is active
         let livePredictionPromise = null;
         if (simStain === "live" && simError === "none") {
-            const isLocalHost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-            const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-            
-            // If running on localhost in a desktop browser, target the local server.
-            // On mobile devices (including APK webviews), we target the cloud Render backend.
-            const targetUrl = (isLocalHost && !isMobileDevice) 
-                ? `http://localhost:5000/predict` 
-                : `${CONFIG.API_BASE_URL}/predict`;
+            const targetUrl = `${CONFIG.API_BASE_URL}/predict`;
 
             livePredictionPromise = fetch(targetUrl, {
                 method: "POST",
