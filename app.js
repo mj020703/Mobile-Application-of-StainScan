@@ -203,11 +203,10 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         // Hide/Show Header and Navigation Bar based on screen
+        appHeader.style.display = "none";
         if (screenId === "screen-auth") {
-            appHeader.style.display = "none";
             appNavBar.style.display = "none";
         } else {
-            appHeader.style.display = "flex";
             appNavBar.style.display = "flex";
         }
 
@@ -560,48 +559,64 @@ document.addEventListener("DOMContentLoaded", () => {
         ];
 
         let currentStepIndex = 0;
+        let isPredictionFinished = false;
+        let predictionResult = null;
+        let predictionError = null;
+
+        if (simStain === "live" && simError === "none") {
+            if (livePredictionPromise) {
+                livePredictionPromise.then(result => {
+                    predictionResult = result;
+                    isPredictionFinished = true;
+                }).catch(err => {
+                    predictionError = err;
+                    isPredictionFinished = true;
+                });
+            } else {
+                predictionError = new Error("Prediction server offline or host unreachable");
+                isPredictionFinished = true;
+            }
+        } else {
+            isPredictionFinished = true;
+        }
 
         const interval = setInterval(() => {
             progress += 2;
+            
+            if (progress > 100) {
+                if (!isPredictionFinished) {
+                    progress = 0;
+                    currentStepIndex = 0;
+                } else {
+                    clearInterval(interval);
+                    scanOverlayLine.style.display = "none";
+                    scannerLoader.style.display = "none";
+
+                    if (simError !== "none") {
+                        handleSimulationError(simError);
+                    } else if (simStain === "live") {
+                        if (predictionError) {
+                            processScanningFailure(predictionError.message || "Connection refused");
+                        } else if (predictionResult && !predictionResult.error) {
+                            processScanningSuccess(predictionResult.stain, predictionResult.fabric, predictionResult.confidence);
+                        } else {
+                            const errMsg = (predictionResult && predictionResult.error) ? predictionResult.error : "Unknown backend error";
+                            processScanningFailure(errMsg);
+                        }
+                    } else {
+                        processScanningSuccess(simStain, simFabric, simConfidence);
+                    }
+                    return;
+                }
+            }
+
             progressBarFill.style.width = `${progress}%`;
 
             const activeStep = statusSteps[currentStepIndex];
-            if (progress >= activeStep.limit) {
+            if (activeStep && progress >= activeStep.limit) {
                 loaderStatusText.textContent = activeStep.text;
                 loaderSubtext.textContent = activeStep.sub;
                 currentStepIndex++;
-            }
-
-            if (progress >= 100) {
-                clearInterval(interval);
-                scanOverlayLine.style.display = "none";
-                scannerLoader.style.display = "none";
-
-                if (simError !== "none") {
-                    handleSimulationError(simError);
-                } else if (simStain === "live") {
-                    if (livePredictionPromise) {
-                        livePredictionPromise.then(result => {
-                            if (result && !result.error) {
-                                // Successful live classification
-                                processScanningSuccess(result.stain, result.fabric, result.confidence);
-                            } else {
-                                // Backend error payload
-                                const errMsg = (result && result.error) ? result.error : "Unknown backend error";
-                                processScanningFailure(errMsg);
-                            }
-                        })
-                            .catch(err => {
-                                // Backend fetch error/connection failure
-                                processScanningFailure(err.message || "Connection refused");
-                            });
-                    } else {
-                        // Backend server offline
-                        processScanningFailure("Prediction server offline or host unreachable");
-                    }
-                } else {
-                    processScanningSuccess(simStain, simFabric, simConfidence);
-                }
             }
         }, 50);
     });

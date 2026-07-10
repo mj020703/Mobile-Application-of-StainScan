@@ -114,17 +114,8 @@ body {
     align-items: center;
 }
 
-/* --- Top Header styling --- */
 .app-header {
-    height: 64px;
-    padding: 0 20px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid var(--border-color);
-    z-index: 9;
-    background: rgba(15, 21, 38, 0.85);
-    backdrop-filter: blur(var(--blur-glass));
+    display: none !important;
 }
 
 .header-logo {
