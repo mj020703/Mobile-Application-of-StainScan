@@ -682,6 +682,37 @@ document.addEventListener("DOMContentLoaded", () => {
         resultsBadge.style.color = "";
         document.getElementById("btnViewCleaningGuide").style.display = "inline-flex";
 
+        const resultStainType = document.getElementById("resultStainType");
+        const resultFabricType = document.getElementById("resultFabricType");
+        const resultConfidence = document.getElementById("resultConfidence");
+        const resultConfidenceBar = document.getElementById("resultConfidenceBar");
+        const safetyBanner = document.getElementById("safetyBanner");
+
+        // --- 70% Confidence Threshold Guardrail ---
+        if (confidence < 70) {
+            resultsBadge.innerHTML = `<i class="fas fa-circle-exclamation"></i> Stain Not Detected`;
+            resultsBadge.style.backgroundColor = "rgba(239, 68, 68, 0.1)";
+            resultsBadge.style.color = "#ef4444";
+
+            resultStainType.textContent = "Unrecognized Input";
+            resultFabricType.textContent = "N/A";
+            resultConfidence.textContent = `${confidence}%`;
+            resultConfidenceBar.style.width = `${confidence}%`;
+
+            safetyBanner.className = "safety-warning-banner";
+            safetyBanner.style.backgroundColor = "rgba(239, 68, 68, 0.08)";
+            safetyBanner.style.borderColor = "rgba(239, 68, 68, 0.2)";
+            safetyBanner.style.color = "#ef4444";
+            safetyBanner.innerHTML = `<i class="fas fa-triangle-exclamation"></i> <span>The system could not confidently identify a fabric stain. Please ensure the fabric is well-lit and flat, then try again.</span>`;
+            
+            document.getElementById("btnViewCleaningGuide").style.display = "none";
+            
+            DataStore.addLog("warning", `Low confidence scan rejected (${confidence}% confidence)`);
+            resultsCard.style.display = "block";
+            showToast("Unrecognized Input", "warning");
+            return;
+        }
+
         scanResultData = {
             id: "h_" + Math.random().toString(36).substr(2, 9),
             email: currentUser.email,
@@ -692,12 +723,6 @@ document.addEventListener("DOMContentLoaded", () => {
             status: "Pending",
             image: ""
         };
-
-        const resultStainType = document.getElementById("resultStainType");
-        const resultFabricType = document.getElementById("resultFabricType");
-        const resultConfidence = document.getElementById("resultConfidence");
-        const resultConfidenceBar = document.getElementById("resultConfidenceBar");
-        const safetyBanner = document.getElementById("safetyBanner");
 
         resultStainType.textContent = stain;
         resultFabricType.textContent = fabric;
