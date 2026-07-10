@@ -6,6 +6,7 @@ from PIL import Image
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
+import certifi
 
 # Load configuration same as training
 IMAGE_SIZE = (224, 224)
@@ -125,7 +126,7 @@ is_demo_mode = True
 
 if MONGO_URI:
     try:
-        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000, tls=True, tlsAllowInvalidCertificates=True)
+        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000, tls=True, tlsCAFile=certifi.where())
         db = client["stainscan_db"]
         client.server_info() # Trigger quick connection check
         is_demo_mode = False

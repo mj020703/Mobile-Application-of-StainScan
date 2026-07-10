@@ -7,6 +7,7 @@ h5py==3.11.0
 scikit-learn==1.4.2
 pymongo==4.7.2
 dnspython==2.6.1
+certifi==2024.7.4
 
 # PyTorch CPU version (optimizes memory usage and reduces package size on free tiers)
 --find-links https://download.pytorch.org/whl/cpu/torch_stable.html
