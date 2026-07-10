@@ -7,3 +7,7 @@ Mud_cotton/
 *.JPG
 *.png
 *.PNG
+
+# Allow tracking weights and logo
+!stainscan_model.pth
+!stainscan_logo.png

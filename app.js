@@ -4,6 +4,12 @@
    runs interactive cleaning checklists for users.
    ========================================================================== */
 
+// --- Backend API URL Configuration ---
+// Modify this URL to point to your live cloud server (e.g., Render) when deployed.
+const CONFIG = {
+    API_BASE_URL: "https://stainscan-backend-gmbw.onrender.com"
+};
+
 // --- Default Knowledge Base Recommendations ---
 const defaultKnowledgeBase = {
     "Used Cooking Oil": {
@@ -41,110 +47,88 @@ const defaultKnowledgeBase = {
     }
 };
 
-// --- Mock Datastore Initializer ---
+// --- Live Cloud API Integration Datastore ---
 class DataStore {
-    static init() {
-        let currentKB = null;
-        try {
-            currentKB = JSON.parse(localStorage.getItem("stainscan_kb"));
-        } catch (e) {
-            currentKB = null;
-        }
-
-        if (!currentKB || typeof currentKB !== "object" || !currentKB["Used Cooking Oil"] || !currentKB["Black Ballpen Ink"] || !currentKB["Mud"]) {
-            localStorage.setItem("stainscan_kb", JSON.stringify(defaultKnowledgeBase));
-        }
-        if (!localStorage.getItem("stainscan_users")) {
-            const defaultUsers = [
-                { name: "Admin Manager", email: "admin@stainscan.com", password: "admin123", role: "admin", avatar: "admin" },
-                { name: "John Doe", email: "user@stainscan.com", password: "user123", role: "user", avatar: "John" }
-            ];
-            localStorage.setItem("stainscan_users", JSON.stringify(defaultUsers));
-        }
-        if (!localStorage.getItem("stainscan_history")) {
-            const defaultHistory = [
-                {
-                    id: "h_1",
-                    email: "user@stainscan.com",
-                    stain: "Mud",
-                    fabric: "Cotton Fabric (100%)",
-                    confidence: 94,
-                    timestamp: new Date(Date.now() - 3600000 * 24).toISOString(), // 1 day ago
-                    status: "Treated",
-                    image: "https://images.unsplash.com/photo-1595079676339-1534801ad6cf?w=400&q=80"
-                },
-                {
-                    id: "h_2",
-                    email: "user@stainscan.com",
-                    stain: "Used Cooking Oil",
-                    fabric: "Cotton Fabric (100%)",
-                    confidence: 85,
-                    timestamp: new Date(Date.now() - 3600000 * 4).toISOString(), // 4 hours ago
-                    status: "Pending",
-                    image: "https://images.unsplash.com/photo-1584269600464-37b1b58a9fe7?w=400&q=80"
-                }
-            ];
-            localStorage.setItem("stainscan_history", JSON.stringify(defaultHistory));
-        }
-        if (!localStorage.getItem("stainscan_logs")) {
-            const defaultLogs = [
-                { time: new Date().toISOString(), type: "info", text: "Database initialized successfully." },
-                { time: new Date().toISOString(), type: "info", text: "CNN Stain classification models loaded (Ver 2.5)." },
-                { time: new Date().toISOString(), type: "info", text: "Fabric classification safety models loaded (Ver 1.1)." }
-            ];
-            localStorage.setItem("stainscan_logs", JSON.stringify(defaultLogs));
-        }
+    static getApiUrl(endpoint) {
+        const isLocalHost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+        const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        const base = (isLocalHost && !isMobileDevice) 
+            ? `http://localhost:5000` 
+            : CONFIG.API_BASE_URL;
+        return `${base}${endpoint}`;
     }
 
-    static getKB() { return JSON.parse(localStorage.getItem("stainscan_kb")); }
-    static saveKB(kb) {
+    static async init() {
         try {
-            localStorage.setItem("stainscan_kb", JSON.stringify(kb));
-        } catch (e) {
-            console.error("Failed to save KB to localStorage:", e);
-        }
-    }
-    static getUsers() { return JSON.parse(localStorage.getItem("stainscan_users")); }
-    static saveUsers(users) {
-        try {
-            localStorage.setItem("stainscan_users", JSON.stringify(users));
-        } catch (e) {
-            console.error("Failed to save users to localStorage:", e);
-        }
-    }
-    static getHistory() { return JSON.parse(localStorage.getItem("stainscan_history")); }
-    static saveHistory(hist) {
-        try {
-            localStorage.setItem("stainscan_history", JSON.stringify(hist));
-        } catch (e) {
-            console.error("Failed to save history: storage quota exceeded. Clearing older history items...", e);
-            if (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED") {
-                // Keep only the 5 most recent items
-                if (hist.length > 5) {
-                    const truncated = hist.slice(0, 5);
-                    try {
-                        localStorage.setItem("stainscan_history", JSON.stringify(truncated));
-                        this.addLog("warning", "Storage quota exceeded. Older history items cleared.");
-                    } catch (err) {
-                        console.error("Storage still exceeded after truncation:", err);
-                    }
-                }
+            const res = await fetch(this.getApiUrl("/api/kb"));
+            if (res.ok) {
+                const kb = await res.json();
+                localStorage.setItem("stainscan_kb", JSON.stringify(kb));
             }
-        }
-    }
-    static getLogs() { return JSON.parse(localStorage.getItem("stainscan_logs")); }
-    static saveLogs(logs) {
-        try {
-            localStorage.setItem("stainscan_logs", JSON.stringify(logs));
         } catch (e) {
-            console.error("Failed to save logs to localStorage:", e);
+            console.warn("Could not fetch KB from cloud on init, using local storage cache:", e);
         }
     }
 
-    static addLog(type, text) {
-        const logs = this.getLogs();
-        logs.unshift({ time: new Date().toISOString(), type, text });
-        this.saveLogs(logs.slice(0, 100)); // limit to last 100 logs
+    static getKB() {
+        return JSON.parse(localStorage.getItem("stainscan_kb")) || defaultKnowledgeBase;
+    }
+
+    static async saveKB(kb) {
+        localStorage.setItem("stainscan_kb", JSON.stringify(kb));
+        try {
+            await fetch(this.getApiUrl("/api/kb"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(kb)
+            });
+        } catch (e) {
+            console.error("Failed to save KB to cloud:", e);
+        }
+    }
+
+    static async getHistoryCloud(email) {
+        try {
+            const res = await fetch(this.getApiUrl(`/api/scans?email=${encodeURIComponent(email)}`));
+            if (res.ok) {
+                const scans = await res.json();
+                localStorage.setItem(`stainscan_history_${email}`, JSON.stringify(scans));
+                return scans;
+            }
+        } catch (e) {
+            console.warn("Failed to get scans from cloud, using offline cache:", e);
+        }
+        return JSON.parse(localStorage.getItem(`stainscan_history_${email}`)) || [];
+    }
+
+    static async saveHistoryCloud(scanItem) {
+        const email = scanItem.email;
+        const localHist = JSON.parse(localStorage.getItem(`stainscan_history_${email}`)) || [];
+        localHist.unshift(scanItem);
+        localStorage.setItem(`stainscan_history_${email}`, JSON.stringify(localHist.slice(0, 10)));
+
+        try {
+            await fetch(this.getApiUrl("/api/scans"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(scanItem)
+            });
+        } catch (e) {
+            console.error("Failed to upload scan history to cloud:", e);
+        }
+    }
+
+    static async addLog(type, text) {
+        console.log(`[LOG - ${type}] ${text}`);
+        try {
+            await fetch(this.getApiUrl("/api/logs"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ type, text })
+            });
+        } catch (e) {
+            console.warn("Could not post log to cloud:", e);
+        }
     }
 }
 
@@ -252,9 +236,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // If landing on specific screens, reload lists/content
         if (screenId === "screen-dashboard") {
-            renderDashboard();
+            DataStore.getHistoryCloud(currentUser.email).then(scans => {
+                renderDashboard(scans);
+            });
         } else if (screenId === "screen-history") {
-            renderHistory();
+            DataStore.getHistoryCloud(currentUser.email).then(scans => {
+                renderHistory(scans);
+            });
         } else if (screenId === "screen-profile") {
             renderProfile();
         }
@@ -302,24 +290,33 @@ document.addEventListener("DOMContentLoaded", () => {
         const email = document.getElementById("login-email").value.trim().toLowerCase();
         const password = document.getElementById("login-password").value;
 
-        const users = DataStore.getUsers();
-        const matchedUser = users.find(u => u.email === email && u.password === password);
-
-        if (matchedUser) {
+        fetch(DataStore.getApiUrl("/api/login"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password })
+        })
+        .then(res => {
+            const contentType = res.headers.get("content-type");
+            if (!contentType || !contentType.includes("application/json")) {
+                throw new Error("Unable to connect to the cloud service. Please verify that your backend server has been successfully redeployed on Render.");
+            }
+            if (!res.ok) {
+                return res.json().then(err => { throw new Error(err.error || "Login failed"); });
+            }
+            return res.json();
+        })
+        .then(matchedUser => {
             currentUser = matchedUser;
             sessionStorage.setItem("stainscan_current_user", JSON.stringify(matchedUser));
             headerAvatar.src = `https://api.dicebear.com/7.x/bottts/svg?seed=${matchedUser.avatar || matchedUser.name}`;
             dashboardUserName.textContent = matchedUser.name;
             showToast(`Welcome back, ${matchedUser.name}!`);
-            DataStore.addLog("info", `User login successful: ${matchedUser.email}`);
             navigateTo("screen-dashboard");
-
-            // clear form
             document.getElementById("loginForm").reset();
-        } else {
-            showToast("Invalid email credentials or password.", "error");
-            DataStore.addLog("warning", `Failed login attempt for: ${email}`);
-        }
+        })
+        .catch(err => {
+            showToast(err.message || "Invalid email credentials or password.", "error");
+        });
     });
 
     // Registration Form Submit
@@ -335,28 +332,29 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
-        const users = DataStore.getUsers();
-        if (users.find(u => u.email === email)) {
-            showToast("Email address already registered.", "error");
-            return;
-        }
-
-        // Add user
-        const newUser = {
-            name,
-            email,
-            password,
-            role: "user",
-            avatar: name
-        };
-        users.push(newUser);
-        DataStore.saveUsers(users);
-        DataStore.addLog("info", `New user registered: ${email}`);
-        showToast("Account created successfully! Please Sign In.");
-
-        // Go back to login
-        document.getElementById("registerForm").reset();
-        document.getElementById("btnGoLogin").click();
+        fetch(DataStore.getApiUrl("/api/register"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, email, password })
+        })
+        .then(res => {
+            const contentType = res.headers.get("content-type");
+            if (!contentType || !contentType.includes("application/json")) {
+                throw new Error("Unable to connect to the cloud service. Please verify that your backend server has been successfully redeployed on Render.");
+            }
+            if (!res.ok) {
+                return res.json().then(err => { throw new Error(err.error || "Registration failed"); });
+            }
+            return res.json();
+        })
+        .then(newUser => {
+            showToast("Account created successfully! Please Sign In.");
+            document.getElementById("registerForm").reset();
+            document.getElementById("btnGoLogin").click();
+        })
+        .catch(err => {
+            showToast(err.message || "Registration failed.", "error");
+        });
     });
 
     // Password Recovery Submit
@@ -376,8 +374,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // --- USER DASHBOARD MODULE ---
-    function renderDashboard() {
-        const history = DataStore.getHistory().filter(h => h.email === currentUser.email);
+    function renderDashboard(historyList) {
+        const history = historyList || JSON.parse(localStorage.getItem(`stainscan_history_${currentUser.email}`)) || [];
 
         // Update stats
         document.getElementById("statTotalScans").textContent = history.length;
@@ -532,13 +530,19 @@ document.addEventListener("DOMContentLoaded", () => {
         const simConfidence = parseInt(document.getElementById("sim-confidence").value) || 85;
         const simError = document.getElementById("sim-error-trigger").value;
 
-        // Contact live local backend server if "live" mode is active
+        // Contact live prediction server if "live" mode is active
         let livePredictionPromise = null;
         if (simStain === "live" && simError === "none") {
-            const backendHost = !window.location.hostname || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
-                ? "localhost"
-                : window.location.hostname;
-            livePredictionPromise = fetch(`http://${backendHost}:5000/predict`, {
+            const isLocalHost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+            const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            
+            // If running on localhost in a desktop browser, target the local server.
+            // On mobile devices (including APK webviews), we target the cloud Render backend.
+            const targetUrl = (isLocalHost && !isMobileDevice) 
+                ? `http://localhost:5000/predict` 
+                : `${CONFIG.API_BASE_URL}/predict`;
+
+            livePredictionPromise = fetch(targetUrl, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json"
@@ -692,9 +696,7 @@ document.addEventListener("DOMContentLoaded", () => {
             document.getElementById("btnViewCleaningGuide").style.display = "inline-flex";
         }
 
-        const history = DataStore.getHistory();
-        history.unshift(scanResultData);
-        DataStore.saveHistory(history);
+        DataStore.saveHistoryCloud(scanResultData);
         DataStore.addLog("info", `Successful CNN scan: ${stain} on ${fabric} (${confidence}% confidence)`);
 
         resultsCard.style.display = "block";
@@ -745,8 +747,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const historySearch = document.getElementById("historySearch");
     let activeFilter = "all";
 
-    function renderHistory() {
-        const history = DataStore.getHistory().filter(h => h.email === currentUser.email);
+    function renderHistory(historyList) {
+        const history = historyList || JSON.parse(localStorage.getItem(`stainscan_history_${currentUser.email}`)) || [];
         const searchQuery = historySearch.value.trim().toLowerCase();
 
         historyListContainer.innerHTML = "";

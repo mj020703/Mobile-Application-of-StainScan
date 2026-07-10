@@ -4,78 +4,87 @@
    localStorage database, recipe modifications, and analytics updates.
    ========================================================================== */
 
-class AdminDataStore {
-    static init() {
-        if (!localStorage.getItem("stainscan_users")) {
-            const defaultUsers = [
-                { name: "Admin Manager", email: "admin@stainscan.com", password: "admin123", role: "admin", avatar: "admin" },
-                { name: "John Doe", email: "user@stainscan.com", password: "user123", role: "user", avatar: "John" }
-            ];
-            localStorage.setItem("stainscan_users", JSON.stringify(defaultUsers));
-        }
-        let currentKB = null;
-        try {
-            currentKB = JSON.parse(localStorage.getItem("stainscan_kb"));
-        } catch(e) {
-            currentKB = null;
-        }
+const CONFIG = {
+    API_BASE_URL: "https://stainscan-backend-gmbw.onrender.com"
+};
 
-        if (!currentKB || typeof currentKB !== "object" || !currentKB["Used Cooking Oil"] || !currentKB["Black Ballpen Ink"] || !currentKB["Mud"]) {
-            const defaultKB = {
-                "Used Cooking Oil": {
-                    materials: ["Liquid Dish Soap", "Warm Water", "Microfiber Cloth", "Baking Soda"],
-                    steps: [
-                        "Blot the excess oil immediately using a clean paper towel. Do not rub, as this spreads the oil.",
-                        "Apply a generous amount of liquid dish soap directly to the stained area. Dish soap is designed to cut grease.",
-                        "Gently work the soap into the cotton fabric fibers with a soft cloth or toothbrush in circular motions.",
-                        "Let it stand for 5-10 minutes to allow the soap to break down the oil structure.",
-                        "Rinse the area thoroughly with warm water to flush out the grease-soap emulsion.",
-                        "Launder standardly at the highest safe temperature for the garment, then check the area before machine drying."
-                    ]
-                },
-                "Black Ballpen Ink": {
-                    materials: ["Isopropyl Alcohol", "Cotton Balls", "Absorbent Towels", "Liquid Detergent"],
-                    steps: [
-                        "Place an absorbent paper towel directly underneath the stained layer of the fabric to catch bleeding ink.",
-                        "Dab the stain generously using a cotton ball saturated with isopropyl alcohol.",
-                        "Blot repeatedly, switching to fresh cotton balls as they absorb the ink. Do not scrub, blot only.",
-                        "Rinse the stained fabric section thoroughly with cold water to remove the alcohol.",
-                        "Rub a small amount of liquid detergent into any remaining faint ink outline.",
-                        "Wash immediately in a regular laundry cycle, verifying the stain is gone before applying heat drying."
-                    ]
-                },
-                "Mud": {
-                    materials: ["Laundry Brush", "Liquid Laundry Detergent", "Warm Water", "White Vinegar"],
-                    steps: [
-                        "Allow the mud to dry completely. Attempting to clean wet mud will rub dirt deeper into cotton fibers.",
-                        "Scrape or brush off dry mud crust using a stiff-bristled brush.",
-                        "Pre-treat the remaining dirt spots with a small amount of liquid laundry detergent.",
-                        "Rub the fabric together gently under warm running water to release dirt particles.",
-                        "For stubborn brown mud stains, mix equal parts warm water and white vinegar, sponge the area, and let sit for 10 minutes.",
-                        "Rinse clean and launder normally in a warm wash cycle."
-                    ]
-                }
-            };
-            localStorage.setItem("stainscan_kb", JSON.stringify(defaultKB));
-        }
-        if (!localStorage.getItem("stainscan_history")) {
-            localStorage.setItem("stainscan_history", JSON.stringify([]));
-        }
-        if (!localStorage.getItem("stainscan_logs")) {
-            localStorage.setItem("stainscan_logs", JSON.stringify([]));
+class AdminDataStore {
+    static getApiUrl(endpoint) {
+        const isLocalHost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+        const base = isLocalHost ? `http://localhost:5000` : CONFIG.API_BASE_URL;
+        return `${base}${endpoint}`;
+    }
+
+    static async init() {
+        try {
+            const res = await fetch(this.getApiUrl("/api/kb"));
+            if (res.ok) {
+                const kb = await res.json();
+                localStorage.setItem("stainscan_kb", JSON.stringify(kb));
+            }
+        } catch (e) {
+            console.warn("Could not sync KB with cloud on init:", e);
         }
     }
-    static getKB() { return JSON.parse(localStorage.getItem("stainscan_kb")) || {}; }
-    static saveKB(kb) { localStorage.setItem("stainscan_kb", JSON.stringify(kb)); }
-    static getUsers() { return JSON.parse(localStorage.getItem("stainscan_users")) || []; }
-    static getHistory() { return JSON.parse(localStorage.getItem("stainscan_history")) || []; }
-    static getLogs() { return JSON.parse(localStorage.getItem("stainscan_logs")) || []; }
-    static saveLogs(logs) { localStorage.setItem("stainscan_logs", JSON.stringify(logs)); }
 
-    static addLog(type, text) {
-        const logs = this.getLogs();
-        logs.unshift({ time: new Date().toISOString(), type, text });
-        this.saveLogs(logs.slice(0, 100));
+    static getKB() {
+        return JSON.parse(localStorage.getItem("stainscan_kb")) || {};
+    }
+
+    static async saveKB(kb) {
+        localStorage.setItem("stainscan_kb", JSON.stringify(kb));
+        try {
+            await fetch(this.getApiUrl("/api/kb"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(kb)
+            });
+        } catch (e) {
+            console.error("Failed to save KB to cloud:", e);
+        }
+    }
+
+    static async getUsers() {
+        try {
+            const res = await fetch(this.getApiUrl("/api/users"));
+            if (res.ok) return await res.json();
+        } catch (e) {
+            console.error("Failed to fetch users from cloud:", e);
+        }
+        return [];
+    }
+
+    static async getHistory() {
+        try {
+            const res = await fetch(this.getApiUrl("/api/scans"));
+            if (res.ok) return await res.json();
+        } catch (e) {
+            console.error("Failed to fetch scans from cloud:", e);
+        }
+        return [];
+    }
+
+    static async getLogs() {
+        try {
+            const res = await fetch(this.getApiUrl("/api/logs"));
+            if (res.ok) return await res.json();
+        } catch (e) {
+            console.error("Failed to fetch logs from cloud:", e);
+        }
+        return [];
+    }
+
+    static async addLog(type, text) {
+        console.log(`[LOG - ${type}] ${text}`);
+        try {
+            await fetch(this.getApiUrl("/api/logs"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ type, text })
+            });
+        } catch (e) {
+            console.warn("Could not post log to cloud:", e);
+        }
     }
 }
 
@@ -169,15 +178,22 @@ document.addEventListener("DOMContentLoaded", () => {
         const email = document.getElementById("admin-email").value.trim().toLowerCase();
         const password = document.getElementById("admin-password").value;
 
-        const users = AdminDataStore.getUsers();
-        const matched = users.find(u => u.email === email && u.password === password);
-
-        if (matched) {
+        fetch(AdminDataStore.getApiUrl("/api/login"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password })
+        })
+        .then(res => {
+            if (!res.ok) {
+                return res.json().then(err => { throw new Error(err.error || "Login failed"); });
+            }
+            return res.json();
+        })
+        .then(matched => {
             if (matched.role === "admin") {
                 currentAdmin = matched;
                 sessionStorage.setItem("stainscan_current_admin", JSON.stringify(matched));
                 
-                // Show Admin portal UI
                 authContainer.classList.remove("active");
                 mainContainer.style.display = "flex";
                 
@@ -185,17 +201,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 sidebarAvatar.src = `https://api.dicebear.com/7.x/bottts/svg?seed=${matched.avatar || matched.name}`;
                 
                 showToast(`Access granted. Welcome, ${matched.name}!`);
-                AdminDataStore.addLog("info", `Admin dashboard unlocked by: ${matched.email}`);
-                
-                // Load Dashboard
                 renderOverview();
             } else {
                 showToast("Access Denied. Account does not possess System Admin role.", "error");
-                AdminDataStore.addLog("warning", `Restricted access blocked to admin panel: ${email}`);
             }
-        } else {
-            showToast("Invalid credentials entered. Try again.", "error");
-        }
+        })
+        .catch(err => {
+            showToast(err.message || "Invalid credentials entered. Try again.", "error");
+        });
     });
 
     // Log Out
@@ -210,9 +223,9 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // --- OVERVIEW & ANALYTICS PANELS ---
-    function renderOverview() {
-        const users = AdminDataStore.getUsers();
-        const history = AdminDataStore.getHistory();
+    async function renderOverview() {
+        const users = await AdminDataStore.getUsers();
+        const history = await AdminDataStore.getHistory();
 
         // Totals counting
         document.getElementById("totalUsersCount").textContent = users.length;
@@ -257,8 +270,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // --- REGISTERED USERS DIRECTORY PANELS ---
-    function renderUsers() {
-        const users = AdminDataStore.getUsers();
+    async function renderUsers() {
+        const users = await AdminDataStore.getUsers();
         const tableBody = document.getElementById("usersTableBody");
         tableBody.innerHTML = "";
 
@@ -331,8 +344,8 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- AUDIT SYSTEM LOGS PANELS ---
     const logsContainer = document.getElementById("logsContainer");
 
-    function renderLogs() {
-        const logs = AdminDataStore.getLogs();
+    async function renderLogs() {
+        const logs = await AdminDataStore.getLogs();
         logsContainer.innerHTML = "";
 
         if (logs.length === 0) {
@@ -358,24 +371,31 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Clear logs
-    document.getElementById("btnClearLogs").addEventListener("click", () => {
+    document.getElementById("btnClearLogs").addEventListener("click", async () => {
         if (confirm("Are you sure you want to delete all audit logs?")) {
-            localStorage.setItem("stainscan_logs", JSON.stringify([]));
-            AdminDataStore.addLog("info", "System Audit logs cleared by Administrator.");
-            renderLogs();
-            showToast("Logs cleared successfully.");
+            try {
+                await fetch(AdminDataStore.getApiUrl("/api/logs"), {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ type: "info", text: "System Audit logs cleared by Administrator." })
+                });
+                await renderLogs();
+                showToast("Logs cleared successfully.");
+            } catch (e) {
+                console.error("Failed to clear logs:", e);
+            }
         }
     });
 
     // --- REALTIME SYNC POLL ---
     // Poll updates every 4 seconds to sync statistics and logs instantly when mobile scans occur!
-    setInterval(() => {
+    setInterval(async () => {
         if (currentAdmin) {
             const activeTab = document.querySelector(".menu-item.active").getAttribute("data-tab");
             if (activeTab === "admin-overview") {
-                renderOverview();
+                await renderOverview();
             } else if (activeTab === "admin-audit-logs") {
-                renderLogs();
+                await renderLogs();
             }
         }
     }, 4000);

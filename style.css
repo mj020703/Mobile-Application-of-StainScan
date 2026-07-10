@@ -196,6 +196,10 @@ body {
     position: relative;
 }
 
+.app-content:has(#screen-auth.active) {
+    overflow: hidden;
+}
+
 .app-content::-webkit-scrollbar {
     width: 6px;
 }
@@ -477,11 +481,15 @@ body {
    ========================================================================== */
 
 /* --- AUTH SCREEN --- */
+#screen-auth {
+    height: 100%;
+}
+
 .auth-wrapper {
     display: flex;
     flex-direction: column;
     justify-content: center;
-    min-height: calc(820px - 120px);
+    min-height: 100%;
     padding: 10px 0;
 }
 
@@ -2066,6 +2074,7 @@ input:checked + .slider:before {
    PROTOTYPE CONTROLLER PANEL
    ========================================================================== */
 .simulation-panel {
+    display: none !important; /* Hide prototype controller for production/APK packaging */
     position: absolute;
     left: calc(100% + 20px);
     top: 20px;
@@ -2289,4 +2298,23 @@ input:checked + .slider:before {
         border-radius: var(--radius-lg);
         box-shadow: 0 -5px 25px rgba(0,0,0,0.5);
     }
+}
+
+/* --- App Logo Image Styles --- */
+.header-logo-img {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    object-fit: cover;
+    box-shadow: 0 4px 12px var(--color-primary-glow);
+}
+
+.auth-logo-img {
+    width: 60px;
+    height: 60px;
+    border-radius: var(--radius-lg);
+    object-fit: cover;
+    margin: 0 auto 16px;
+    display: block;
+    box-shadow: 0 8px 24px rgba(139, 92, 246, 0.4);
 }
