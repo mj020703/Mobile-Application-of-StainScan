@@ -703,7 +703,7 @@ document.addEventListener("DOMContentLoaded", () => {
             safetyBanner.style.backgroundColor = "rgba(239, 68, 68, 0.08)";
             safetyBanner.style.borderColor = "rgba(239, 68, 68, 0.2)";
             safetyBanner.style.color = "#ef4444";
-            safetyBanner.innerHTML = `<i class="fas fa-triangle-exclamation"></i> <span>The system could not confidently identify a fabric stain. Please ensure the fabric is well-lit and flat, then try again.</span>`;
+            safetyBanner.innerHTML = `<i class="fas fa-triangle-exclamation"></i> <span>Unrecognized Input - The system could not confidently identify a fabric stain. Please ensure the area is flat and well-lit, then try again.</span>`;
             
             document.getElementById("btnViewCleaningGuide").style.display = "none";
             
