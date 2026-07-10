@@ -125,8 +125,17 @@ db = None
 is_demo_mode = True
 
 if MONGO_URI:
+    if "tlsAllowInvalidCertificates" not in MONGO_URI:
+        separator = "&" if "?" in MONGO_URI else "?"
+        MONGO_URI = f"{MONGO_URI}{separator}tlsAllowInvalidCertificates=true"
+        
     try:
-        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000, tls=True, tlsCAFile=certifi.where())
+        client = MongoClient(
+            MONGO_URI, 
+            serverSelectionTimeoutMS=5000, 
+            tls=True, 
+            tlsAllowInvalidCertificates=True
+        )
         db = client["stainscan_db"]
         client.server_info() # Trigger quick connection check
         is_demo_mode = False
