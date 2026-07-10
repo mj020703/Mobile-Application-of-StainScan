@@ -93,19 +93,8 @@ body {
     flex-direction: column;
 }
 
-/* Notch & Status Bar (Simulating Phone interface) */
 .device-status-bar {
-    height: 44px;
-    padding: 0 24px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-muted);
-    background-color: transparent;
-    z-index: 10;
-    user-select: none;
+    display: none !important;
 }
 
 .status-icons {

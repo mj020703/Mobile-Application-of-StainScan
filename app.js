@@ -203,7 +203,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         // Hide/Show Header and Navigation Bar based on screen
-        appHeader.style.display = "none";
+        if (appHeader) appHeader.style.display = "none";
         if (screenId === "screen-auth") {
             appNavBar.style.display = "none";
         } else {
@@ -250,7 +250,9 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
-    headerProfileBtn.addEventListener("click", () => navigateTo("screen-profile"));
+    if (headerProfileBtn) {
+        headerProfileBtn.addEventListener("click", () => navigateTo("screen-profile"));
+    }
 
     // --- AUTHENTICATION MODULE ---
     // Toggle card tabs
@@ -302,7 +304,9 @@ document.addEventListener("DOMContentLoaded", () => {
         .then(matchedUser => {
             currentUser = matchedUser;
             sessionStorage.setItem("stainscan_current_user", JSON.stringify(matchedUser));
-            headerAvatar.src = `https://api.dicebear.com/7.x/bottts/svg?seed=${matchedUser.avatar || matchedUser.name}`;
+            if (headerAvatar) {
+                headerAvatar.src = `https://api.dicebear.com/7.x/bottts/svg?seed=${matchedUser.avatar || matchedUser.name}`;
+            }
             dashboardUserName.textContent = matchedUser.name;
             showToast(`Welcome back, ${matchedUser.name}!`);
             navigateTo("screen-dashboard");
@@ -483,12 +487,38 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const reader = new FileReader();
         reader.onload = (event) => {
-            selectedImageBase64 = event.target.result;
-            uploadedImagePreview.src = selectedImageBase64;
-            uploadEmptyState.style.display = "none";
-            uploadPreviewState.style.display = "block";
-            scanControls.style.display = "block";
-            resultsCard.style.display = "none";
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement("canvas");
+                const max_size = 300;
+                let width = img.width;
+                let height = img.height;
+
+                if (width > height) {
+                    if (width > max_size) {
+                        height *= max_size / width;
+                        width = max_size;
+                    }
+                } else {
+                    if (height > max_size) {
+                        width *= max_size / height;
+                        height = max_size;
+                    }
+                }
+
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext("2d");
+                ctx.drawImage(img, 0, 0, width, height);
+
+                selectedImageBase64 = canvas.toDataURL("image/jpeg", 0.8);
+                uploadedImagePreview.src = selectedImageBase64;
+                uploadEmptyState.style.display = "none";
+                uploadPreviewState.style.display = "block";
+                scanControls.style.display = "block";
+                resultsCard.style.display = "none";
+            };
+            img.src = event.target.result;
         };
         reader.readAsDataURL(file);
     }
@@ -941,7 +971,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 currentUser.avatar = seed;
                 sessionStorage.setItem("stainscan_current_user", JSON.stringify(currentUser));
                 renderProfile();
-                headerAvatar.src = `https://api.dicebear.com/7.x/bottts/svg?seed=${seed}`;
+                if (headerAvatar) {
+                    headerAvatar.src = `https://api.dicebear.com/7.x/bottts/svg?seed=${seed}`;
+                }
                 showToast("Avatar seed updated!");
                 DataStore.addLog("info", `Avatar changed for: ${currentUser.email}`);
             }
@@ -1068,7 +1100,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Initialize View on Page Load
     if (currentUser) {
-        headerAvatar.src = `https://api.dicebear.com/7.x/bottts/svg?seed=${currentUser.avatar || currentUser.name}`;
+        if (headerAvatar) {
+            headerAvatar.src = `https://api.dicebear.com/7.x/bottts/svg?seed=${currentUser.avatar || currentUser.name}`;
+        }
         dashboardUserName.textContent = currentUser.name;
         navigateTo("screen-dashboard");
     } else {
