@@ -125,7 +125,7 @@ is_demo_mode = True
 
 if MONGO_URI:
     try:
-        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000, tls=True, tlsAllowInvalidCertificates=True)
         db = client["stainscan_db"]
         client.server_info() # Trigger quick connection check
         is_demo_mode = False
