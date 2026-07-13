@@ -350,6 +350,7 @@ def api_scans():
             return jsonify({"error": "Missing scan properties"}), 400
             
         new_scan = {
+            "id": data.get("id", ""),
             "email": data["email"].strip().lower(),
             "stain": data["stain"],
             "fabric": data["fabric"],
@@ -365,6 +366,42 @@ def api_scans():
         
     email = request.args.get("email")
     return jsonify(get_scans(email))
+
+@app.route("/api/scans/<scan_id>", methods=["PUT", "PATCH", "OPTIONS"])
+def api_update_scan(scan_id):
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+        
+    data = request.get_json()
+    if not data or "status" not in data:
+        return jsonify({"error": "Missing status parameter"}), 400
+        
+    new_status = data["status"]
+    
+    if not is_demo_mode and db is not None:
+        from bson.objectid import ObjectId
+        try:
+            query = {}
+            if ObjectId.is_valid(scan_id):
+                query = {"$or": [{"_id": ObjectId(scan_id)}, {"id": scan_id}]}
+            else:
+                query = {"$or": [{"id": scan_id}, {"_id": scan_id}]}
+                
+            result = db["scans"].update_one(query, {"$set": {"status": new_status}})
+            if result.matched_count > 0:
+                add_log("info", f"Scan {scan_id} status updated to {new_status}")
+                return jsonify({"success": True, "message": f"Scan updated to {new_status}"})
+        except Exception as e:
+            return jsonify({"error": f"Failed to update scan: {str(e)}"}), 500
+    else:
+        # Mock/Demo database fallback update
+        scan = next((s for s in mock_db["scans"] if s.get("id") == scan_id or s.get("_id") == scan_id), None)
+        if scan:
+            scan["status"] = new_status
+            add_log("info", f"Scan {scan_id} status updated to {new_status} (Demo Mode)")
+            return jsonify({"success": True, "message": f"Scan updated to {new_status}"})
+            
+    return jsonify({"error": "Scan not found"}), 404
 
 @app.route("/api/logs", methods=["GET", "POST", "OPTIONS"])
 def api_logs():

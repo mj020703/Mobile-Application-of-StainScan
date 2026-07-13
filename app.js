@@ -125,6 +125,42 @@ class DataStore {
             console.warn("Could not post log to cloud:", e);
         }
     }
+
+    static getUsers() {
+        return JSON.parse(localStorage.getItem("stainscan_users")) || [];
+    }
+
+    static saveUsers(users) {
+        localStorage.setItem("stainscan_users", JSON.stringify(users));
+    }
+
+    static getHistory(email) {
+        const user = email || (JSON.parse(sessionStorage.getItem("stainscan_current_user")) || {}).email;
+        if (!user) return [];
+        return JSON.parse(localStorage.getItem(`stainscan_history_${user}`)) || [];
+    }
+
+    static saveHistory(hist, email) {
+        const user = email || (JSON.parse(sessionStorage.getItem("stainscan_current_user")) || {}).email;
+        if (!user) return;
+        localStorage.setItem(`stainscan_history_${user}`, JSON.stringify(hist));
+    }
+
+    static async updateScanStatusCloud(scanId, status) {
+        try {
+            const res = await fetch(this.getApiUrl(`/api/scans/${scanId}`), {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status })
+            });
+            if (res.ok) {
+                return await res.json();
+            }
+        } catch (e) {
+            console.error(`Failed to update scan status for ${scanId} in cloud:`, e);
+        }
+        return null;
+    }
 }
 
 // --- Application Core Control ---
@@ -960,18 +996,51 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("btnCloseModal").addEventListener("click", closeGuideModal);
     document.getElementById("btnCancelModal").addEventListener("click", closeGuideModal);
 
-    btnCompleteTreatment.addEventListener("click", () => {
-        if (!activeGuideScanId) return;
+    btnCompleteTreatment.addEventListener("click", async () => {
+        console.log("Complete Treatment button clicked.");
+        if (!activeGuideScanId) {
+            console.error("Click handler triggered but no activeGuideScanId set.");
+            showToast("Failed to complete treatment: active guide scan ID not found.", "error");
+            return;
+        }
 
-        const history = DataStore.getHistory();
-        const itemIdx = history.findIndex(h => h.id === activeGuideScanId);
+        try {
+            // 1. Update local storage cache first for instant feedback
+            const history = DataStore.getHistory();
+            const itemIdx = history.findIndex(h => (h.id === activeGuideScanId || h._id === activeGuideScanId));
 
-        if (itemIdx !== -1) {
-            history[itemIdx].status = "Treated";
-            DataStore.saveHistory(history);
+            if (itemIdx !== -1) {
+                history[itemIdx].status = "Treated";
+                DataStore.saveHistory(history);
+                console.log(`Local storage updated: marked scan ID ${activeGuideScanId} as Treated.`);
+            } else {
+                console.warn(`Scan ID ${activeGuideScanId} not found in local history cache.`);
+            }
+
+            // 2. Update cloud database via API
+            try {
+                const response = await DataStore.updateScanStatusCloud(activeGuideScanId, "Treated");
+                if (response && response.success) {
+                    console.log(`Cloud database updated successfully for scan ID: ${activeGuideScanId}`);
+                } else {
+                    console.warn(`Cloud update returned non-success for scan ID: ${activeGuideScanId}`, response);
+                }
+            } catch (apiError) {
+                console.warn("Could not sync treatment status to API (running local fallback):", apiError);
+            }
+
+            // Log activity to user actions list
             DataStore.addLog("info", `Treatment marked complete for scan ID: ${activeGuideScanId}`);
+
+            // 3. Update the UI state
             showToast("Stain treated and logged successfully!");
+            
+            // Redirect / close modal
             closeGuideModal();
+
+        } catch (err) {
+            console.error("Error executing Complete Treatment click handler:", err);
+            showToast("An unexpected error occurred while completing the treatment.", "error");
         }
     });
 
@@ -1039,13 +1108,17 @@ document.addEventListener("DOMContentLoaded", () => {
             users[idx].email = newEmail;
             DataStore.saveUsers(users);
 
-            const history = DataStore.getHistory();
+            const oldEmail = currentUser.email;
+            const history = DataStore.getHistory(oldEmail);
             history.forEach(item => {
-                if (item.email === currentUser.email) {
+                if (item.email === oldEmail) {
                     item.email = newEmail;
                 }
             });
-            DataStore.saveHistory(history);
+            DataStore.saveHistory(history, newEmail);
+            if (oldEmail !== newEmail) {
+                localStorage.removeItem(`stainscan_history_${oldEmail}`);
+            }
 
             currentUser.name = newName;
             currentUser.email = newEmail;
