@@ -9,5 +9,5 @@ pymongo==4.7.2
 dnspython==2.6.1
 certifi==2024.7.4
 
-# TensorFlow CPU version for lightweight model inference on cloud hosting
-tensorflow-cpu>=2.15.0
+# TensorFlow CPU LTS version for lightweight Keras 2 model inference on cloud hosting
+tensorflow-cpu==2.15.1
