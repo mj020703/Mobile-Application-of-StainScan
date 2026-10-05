@@ -12,7 +12,8 @@ import certifi
 import numpy as np
 
 IMAGE_SIZE   = (224, 224)                 # Exact match with MobileNetV2 input shape
-MODEL_PATH   = "stain_model.h5"           # Primary model file (MobileNetV2 transfer learning)
+MODEL_PATH   = "stainscan_model_v3_balanced.h5"  # Primary retrained model file
+LOADED_MODEL_FILE = None
 CLASS_MAPPING_RAW = {
     0: "ballpen ink_cotton",
     1: "Cooking Oil_cotton",
@@ -684,7 +685,7 @@ def preprocess_image(pil_image: Image.Image) -> np.ndarray:
 
 
 def load_model(force_reload=False):
-    global model
+    global model, LOADED_MODEL_FILE
     if model is not None and not force_reload:
         return
 
@@ -692,7 +693,14 @@ def load_model(force_reload=False):
         print("Warning: TensorFlow not installed. Prediction API will run in demo/fallback mode.")
         return
 
-    candidate_paths = [MODEL_PATH, "stainscan_model.h5", "stain_model.keras", "stainscan_model_v3_balanced.h5", "stainscan_model_v3_balanced.keras"]
+    candidate_paths = [
+        MODEL_PATH,
+        "stain_model.h5",
+        "stainscan_model_v3_balanced.h5",
+        "stainscan_model.h5",
+        "stainscan_model_v3_balanced.keras",
+        "stain_model.keras"
+    ]
     actual_path = None
     for p in candidate_paths:
         if os.path.exists(p):
@@ -708,25 +716,52 @@ def load_model(force_reload=False):
         model = keras.models.load_model(actual_path, compile=False)
         dummy = np.zeros((1,) + IMAGE_SIZE + (3,), dtype=np.float32)
         model.predict(dummy, verbose=0)
+        LOADED_MODEL_FILE = actual_path
         print(f"Model loaded successfully from '{actual_path}'. Input shape: {model.input_shape}")
     except Exception as e:
         print(f"Error loading model from '{actual_path}': {e}")
         model = None
+        LOADED_MODEL_FILE = None
 
 
 # CORS headers handled dynamically by Flask-CORS middleware
 
 @app.route("/health", methods=["GET"])
 def health_check():
-    global model
+    global model, LOADED_MODEL_FILE
     if model is None and os.path.exists(MODEL_PATH):
         load_model()
     return jsonify({
-        "status": "healthy",
+        "status": "healthy" if model is not None else "degraded",
         "model_loaded": model is not None,
-        "model_file": MODEL_PATH,
+        "model_file": LOADED_MODEL_FILE or MODEL_PATH,
+        "configured_model_path": MODEL_PATH,
+        "input_shape": list(model.input_shape) if (model is not None and hasattr(model, "input_shape")) else [None, 224, 224, 3],
         "backend": "TensorFlow/Keras" if HAS_TF else "demo"
     })
+
+@app.route("/api/model-info", methods=["GET", "OPTIONS"])
+def api_model_info():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+    global model, LOADED_MODEL_FILE
+    if model is None:
+        load_model()
+    
+    file_to_check = LOADED_MODEL_FILE if (LOADED_MODEL_FILE and os.path.exists(LOADED_MODEL_FILE)) else (MODEL_PATH if os.path.exists(MODEL_PATH) else None)
+    file_size = os.path.getsize(file_to_check) if (file_to_check and os.path.exists(file_to_check)) else None
+
+    return jsonify({
+        "status": "healthy" if model is not None else "degraded",
+        "model_loaded": model is not None,
+        "model_file": LOADED_MODEL_FILE or MODEL_PATH,
+        "configured_model_path": MODEL_PATH,
+        "input_shape": list(model.input_shape) if (model is not None and hasattr(model, "input_shape")) else [None, 224, 224, 3],
+        "output_shape": list(model.output_shape) if (model is not None and hasattr(model, "output_shape")) else [None, 3],
+        "classes": CLASS_MAPPING_DISPLAY,
+        "backend": "TensorFlow/Keras" if HAS_TF else "demo",
+        "model_size_bytes": file_size
+    }), 200
 
 @app.route("/predict", methods=["POST", "OPTIONS"])
 def predict():

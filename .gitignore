@@ -17,5 +17,7 @@ __pycache__/
 DataSet/
 
 # Allow tracking weights and logo
+!stainscan_model_v3_balanced.h5
+!stain_model.h5
 !stainscan_model.pth
 !stainscan_logo.png

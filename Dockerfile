@@ -21,8 +21,10 @@ COPY requirements.txt .
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the server file and PyTorch model weights
+# Copy the server file and model weights
 COPY server.py .
+COPY stainscan_model_v3_balanced.h5 .
+COPY stain_model.h5 .
 COPY stainscan_model.pth .
 
 # Expose port (default 5000)

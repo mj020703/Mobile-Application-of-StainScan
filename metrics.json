@@ -1,9 +1,9 @@
 {
-  "total_scans": 10,
-  "successful_treatments": 1,
+  "total_scans": 16,
+  "successful_treatments": 7,
   "stain_counts": {
-    "Used Cooking Oil": 5,
-    "Black Ballpen Ink": 1,
-    "Mud": 4
+    "Used Cooking Oil": 8,
+    "Black Ballpen Ink": 3,
+    "Mud": 5
   }
 }
