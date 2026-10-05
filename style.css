@@ -112,6 +112,18 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+/* Hide header brand on login/auth view only */
+.app-top-header.login-mode .top-header-brand,
+.app-device:has(#screen-auth.active) .top-header-brand {
+    display: none !important;
+}
+
+.app-top-header.login-mode,
+.app-device:has(#screen-auth.active) .app-top-header {
+    justify-content: flex-end;
 }
 
 .top-header-logo {
@@ -135,6 +147,7 @@ body {
 .lang-switch-container {
     display: flex;
     align-items: center;
+    margin-left: auto;
 }
 
 .lang-toggle-pill {
@@ -2739,7 +2752,7 @@ input:checked + .slider:before {
     background: linear-gradient(90deg, #00f2fe, #8b5cf6);
     border-radius: 4px;
     box-shadow: 0 0 10px rgba(0, 242, 254, 0.6);
-    animation: splashProgress 1.5s ease-in-out forwards;
+    animation: splashProgress 5.0s ease-in-out forwards;
 }
 
 @keyframes splashProgress {

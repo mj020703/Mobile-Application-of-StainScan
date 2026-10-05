@@ -593,25 +593,36 @@ document.addEventListener("DOMContentLoaded", () => {
     const splashStatus = document.getElementById("splash-status");
 
     if (splashScreen) {
-        // a. Keep the splash screen visible for ~1.5s on app launch
-        // b. At 0.7s, update #splash-status text to "Readying AI Model..."
+        // a. Keep the splash screen visible for exactly 5.0s on app launch
+        // b. At 2.0s, update #splash-status text to "Readying AI Model..."
         setTimeout(() => {
             if (splashStatus) {
                 splashStatus.style.opacity = "0";
                 setTimeout(() => {
                     splashStatus.textContent = "Readying AI Model...";
                     splashStatus.style.opacity = "1";
-                }, 150);
+                }, 200);
             }
-        }, 700);
+        }, 2000);
 
-        // c. At 1.5s, play smooth fade-out / scale-down exit transition and reveal main view
+        // c. At 3.8s, update #splash-status text to "Preparing Diagnostic Engine..."
+        setTimeout(() => {
+            if (splashStatus) {
+                splashStatus.style.opacity = "0";
+                setTimeout(() => {
+                    splashStatus.textContent = "Preparing Diagnostic Engine...";
+                    splashStatus.style.opacity = "1";
+                }, 200);
+            }
+        }, 3800);
+
+        // d. At exactly 5.0s (5000ms), play smooth fade-out exit transition and reveal login screen
         setTimeout(() => {
             splashScreen.classList.add("fade-out");
             setTimeout(() => {
                 splashScreen.style.display = "none";
-            }, 400);
-        }, 1500);
+            }, 450);
+        }, 5000);
     }
 
     // --- Language Selector Buttons ---
@@ -631,6 +642,8 @@ document.addEventListener("DOMContentLoaded", () => {
     let activeGuideScanId = null;
 
     // --- DOM Elements Cache ---
+    const appTopHeader = document.getElementById("appTopHeader");
+    const topHeaderBrand = document.getElementById("topHeaderBrand");
     const appHeader = document.getElementById("appHeader");
     const appNavBar = document.getElementById("appNavBar");
     const headerAvatar = document.getElementById("headerAvatar");
@@ -697,8 +710,12 @@ document.addEventListener("DOMContentLoaded", () => {
         if (appHeader) appHeader.style.display = "none";
         if (screenId === "screen-auth") {
             appNavBar.style.display = "none";
+            if (topHeaderBrand) topHeaderBrand.style.display = "none";
+            if (appTopHeader) appTopHeader.classList.add("login-mode");
         } else {
             appNavBar.style.display = "flex";
+            if (topHeaderBrand) topHeaderBrand.style.display = "flex";
+            if (appTopHeader) appTopHeader.classList.remove("login-mode");
         }
 
         screens.forEach(screen => {
