@@ -747,6 +747,19 @@ if HAS_TF:
             _patch_input(kil.InputLayer)
         except Exception:
             pass
+        def _patch_dense(cls):
+            orig_init = cls.__init__
+            def patched_dense_init(self, *args, **kwargs):
+                kwargs.pop("quantization_config", None)
+                orig_init(self, *args, **kwargs)
+            cls.__init__ = patched_dense_init
+
+        _patch_dense(keras.layers.Dense)
+        try:
+            import keras.src.layers.core.dense as kd
+            _patch_dense(kd.Dense)
+        except Exception:
+            pass
     except Exception as e:
         print(f"Warning setting compatibility patches: {e}")
 else:
