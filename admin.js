@@ -76,6 +76,16 @@ class AdminDataStore {
         return [];
     }
 
+    static async getMetrics() {
+        try {
+            const res = await fetch(this.getApiUrl("/api/metrics"));
+            if (res.ok) return await res.json();
+        } catch (e) {
+            console.warn("Failed to fetch metrics from cloud:", e);
+        }
+        return null;
+    }
+
     static async getLogs() {
         try {
             const res = await fetch(this.getApiUrl("/api/logs"));
@@ -236,18 +246,34 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // --- OVERVIEW & ANALYTICS PANELS ---
     async function renderOverview() {
-        const users = await AdminDataStore.getUsers();
-        const history = await AdminDataStore.getHistory();
+        const [users, history, metrics] = await Promise.all([
+            AdminDataStore.getUsers(),
+            AdminDataStore.getHistory(),
+            AdminDataStore.getMetrics()
+        ]);
 
         // Totals counting
-        document.getElementById("totalUsersCount").textContent = users.length;
-        document.getElementById("totalScansCount").textContent = history.length;
-        
-        const treatedCount = history.filter(h => h.status === "Treated").length;
-        document.getElementById("totalTreatedCount").textContent = treatedCount;
+        const totalUsers = users.length;
+        const totalScans = (metrics && typeof metrics.total_scans === "number")
+            ? Math.max(metrics.total_scans, history.length)
+            : history.length;
+
+        const treatedFromHistory = history.filter(h => h.status === "Treated").length;
+        const totalTreated = (metrics && typeof metrics.successful_treatments === "number")
+            ? Math.max(metrics.successful_treatments, treatedFromHistory)
+            : treatedFromHistory;
+
+        const totalUsersEl = document.getElementById("totalUsersCount");
+        const totalScansEl = document.getElementById("totalScansCount");
+        const totalTreatedEl = document.getElementById("totalTreatedCount");
+
+        if (totalUsersEl) totalUsersEl.textContent = totalUsers;
+        if (totalScansEl) totalScansEl.textContent = totalScans;
+        if (totalTreatedEl) totalTreatedEl.textContent = totalTreated;
 
         // Render Stain Distribution SVG Charts
         const chartContainer = document.getElementById("adminStainChart");
+        if (!chartContainer) return;
         chartContainer.innerHTML = "";
 
         const counts = {
@@ -256,8 +282,16 @@ document.addEventListener("DOMContentLoaded", () => {
             "Mud": 0
         };
 
+        if (metrics && metrics.stain_counts) {
+            Object.keys(counts).forEach(k => {
+                if (typeof metrics.stain_counts[k] === "number") {
+                    counts[k] = metrics.stain_counts[k];
+                }
+            });
+        }
+
         history.forEach(item => {
-            if (counts[item.stain] !== undefined) {
+            if (counts[item.stain] !== undefined && (!metrics || !metrics.stain_counts)) {
                 counts[item.stain]++;
             }
         });
@@ -400,17 +434,18 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // --- REALTIME SYNC POLL ---
-    // Poll updates every 4 seconds to sync statistics and logs instantly when mobile scans occur!
+    // Poll updates every 2.5 seconds to sync statistics and logs instantly when mobile scans occur!
     setInterval(async () => {
         if (currentAdmin) {
-            const activeTab = document.querySelector(".menu-item.active").getAttribute("data-tab");
+            const activeMenuItem = document.querySelector(".menu-item.active");
+            const activeTab = activeMenuItem ? activeMenuItem.getAttribute("data-tab") : "admin-overview";
             if (activeTab === "admin-overview") {
                 await renderOverview();
             } else if (activeTab === "admin-audit-logs") {
                 await renderLogs();
             }
         }
-    }, 4000);
+    }, 2500);
 
     // Initial check
     if (currentAdmin) {

@@ -1,5 +1,6 @@
 import base64
 from io import BytesIO
+import json
 import os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 from datetime import datetime
@@ -223,6 +224,18 @@ else:
     print("MONGO_URI not configured. Running in memory fallback mode.")
     is_demo_mode = True
 
+SCANS_FILE = "scans.json"
+METRICS_FILE = "metrics.json"
+
+def _load_initial_scans():
+    if os.path.exists(SCANS_FILE):
+        try:
+            with open(SCANS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading initial scans from file: {e}")
+    return []
+
 # Fallback memory stores
 if is_demo_mode:
     mock_db = {
@@ -230,12 +243,123 @@ if is_demo_mode:
             { "name": "Admin Manager", "email": "admin@stainscan.com", "password": "admin123", "role": "admin", "avatar": "admin" },
             { "name": "John Doe", "email": "user@stainscan.com", "password": "user123", "role": "user", "avatar": "John" }
         ],
-        "scans": [],
+        "scans": _load_initial_scans(),
         "logs": [
             { "time": datetime.utcnow().isoformat(), "type": "info", "text": "Database initialized successfully (Demo Mode)." }
         ],
-        "kb": DEFAULT_KB
+        "kb": DEFAULT_KB,
+        "metrics": {}
     }
+
+def get_metrics():
+    if not is_demo_mode and db is not None:
+        try:
+            doc = db["metrics"].find_one({"_id": "app_metrics"})
+            if doc:
+                return {
+                    "total_scans": int(doc.get("total_scans", 0)),
+                    "successful_treatments": int(doc.get("successful_treatments", 0)),
+                    "stain_counts": doc.get("stain_counts", {})
+                }
+        except Exception as e:
+            print(f"Error fetching metrics from MongoDB: {e}")
+
+    if os.path.exists(METRICS_FILE):
+        try:
+            with open(METRICS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+
+    all_scans = get_scans()
+    stain_counts = {"Used Cooking Oil": 0, "Black Ballpen Ink": 0, "Mud": 0}
+    for s in all_scans:
+        st = s.get("stain")
+        if st in stain_counts:
+            stain_counts[st] += 1
+
+    metrics = {
+        "total_scans": len(all_scans),
+        "successful_treatments": len([s for s in all_scans if s.get("status") == "Treated"]),
+        "stain_counts": stain_counts
+    }
+    save_metrics(metrics)
+    return metrics
+
+def save_metrics(metrics):
+    if not is_demo_mode and db is not None:
+        try:
+            db["metrics"].replace_one({"_id": "app_metrics"}, {"_id": "app_metrics", **metrics}, upsert=True)
+        except Exception as e:
+            print(f"Error saving metrics to MongoDB: {e}")
+
+    try:
+        with open(METRICS_FILE, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, indent=2)
+    except Exception as e:
+        print(f"Error saving metrics to file: {e}")
+
+    if is_demo_mode and "metrics" in mock_db:
+        mock_db["metrics"] = metrics
+
+def increment_scan_count(stain_name=None, fabric_name=None, confidence=None, email=None):
+    metrics = get_metrics()
+    metrics["total_scans"] = metrics.get("total_scans", 0) + 1
+
+    if stain_name:
+        stain_counts = metrics.setdefault("stain_counts", {})
+        stain_counts[stain_name] = stain_counts.get(stain_name, 0) + 1
+
+    save_metrics(metrics)
+
+    # Also log a persistent scan record in the scans table
+    scan_id = "h_" + datetime.utcnow().strftime("%Y%m%d%H%M%S") + "_" + str(metrics["total_scans"])
+    new_scan = {
+        "id": scan_id,
+        "email": email or "mobile_user@stainscan.com",
+        "stain": stain_name or "Unknown",
+        "fabric": fabric_name or "Cotton Fabric (100%)",
+        "confidence": int(confidence or 90),
+        "timestamp": datetime.utcnow().isoformat(),
+        "status": "Pending",
+        "image": ""
+    }
+    try:
+        add_scan(new_scan)
+        add_log("info", f"CNN Scan #{metrics['total_scans']} classified: {stain_name} ({confidence}%)")
+    except Exception as e:
+        print(f"Error logging scan record: {e}")
+
+    return metrics
+
+def increment_treatment_count(scan_id=None):
+    metrics = get_metrics()
+    metrics["successful_treatments"] = metrics.get("successful_treatments", 0) + 1
+    save_metrics(metrics)
+
+    if scan_id:
+        try:
+            if not is_demo_mode and db is not None:
+                from bson.objectid import ObjectId
+                query = {"$or": [{"_id": ObjectId(scan_id)}, {"id": scan_id}]} if ObjectId.is_valid(scan_id) else {"id": scan_id}
+                db["scans"].update_one(query, {"$set": {"status": "Treated"}})
+            else:
+                s = next((x for x in mock_db["scans"] if x.get("id") == scan_id or x.get("_id") == scan_id), None)
+                if s:
+                    s["status"] = "Treated"
+                    _save_scans_file()
+        except Exception as e:
+            print(f"Error updating scan status in increment_treatment_count: {e}")
+
+    add_log("info", f"Treatment #{metrics['successful_treatments']} completed successfully (Scan ID: {scan_id or 'N/A'})")
+    return metrics
+
+def _save_scans_file():
+    try:
+        with open(SCANS_FILE, "w", encoding="utf-8") as f:
+            json.dump(mock_db["scans"], f, indent=2)
+    except Exception as e:
+        print(f"Error saving scans file: {e}")
 
 def get_users():
     if not is_demo_mode and db is not None:
@@ -289,8 +413,10 @@ def add_scan(scan):
         result = db["scans"].insert_one(scan)
         scan["_id"] = str(result.inserted_id)
         return scan
-    scan["id"] = "h_" + str(len(mock_db["scans"]) + 1)
-    mock_db["scans"].append(scan)
+    if not scan.get("id"):
+        scan["id"] = "h_" + str(len(mock_db["scans"]) + 1)
+    mock_db["scans"].insert(0, scan)
+    _save_scans_file()
     return scan
 
 def get_logs():
@@ -464,6 +590,8 @@ def api_update_scan(scan_id):
                 
             result = db["scans"].update_one(query, {"$set": {"status": new_status}})
             if result.matched_count > 0:
+                if new_status == "Treated":
+                    increment_treatment_count(scan_id=scan_id)
                 add_log("info", f"Scan {scan_id} status updated to {new_status}")
                 return jsonify({"success": True, "message": f"Scan updated to {new_status}"})
         except Exception as e:
@@ -473,10 +601,37 @@ def api_update_scan(scan_id):
         scan = next((s for s in mock_db["scans"] if s.get("id") == scan_id or s.get("_id") == scan_id), None)
         if scan:
             scan["status"] = new_status
+            _save_scans_file()
+            if new_status == "Treated":
+                increment_treatment_count(scan_id=scan_id)
             add_log("info", f"Scan {scan_id} status updated to {new_status} (Demo Mode)")
             return jsonify({"success": True, "message": f"Scan updated to {new_status}"})
             
     return jsonify({"error": "Scan not found"}), 404
+
+@app.route("/api/treatment-complete", methods=["POST", "OPTIONS"])
+def api_treatment_complete():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+    data = request.get_json(silent=True) or {}
+    scan_id = data.get("scan_id") or data.get("id")
+    metrics = increment_treatment_count(scan_id=scan_id)
+    return jsonify({
+        "success": True,
+        "message": "Treatment marked complete and metrics updated",
+        "successful_treatments": metrics.get("successful_treatments", 0),
+        "metrics": metrics
+    }), 200
+
+@app.route("/api/metrics", methods=["GET", "OPTIONS"])
+def api_metrics():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+    metrics = get_metrics()
+    all_scans = get_scans()
+    metrics["total_scans"] = max(metrics.get("total_scans", 0), len(all_scans))
+    metrics["successful_treatments"] = max(metrics.get("successful_treatments", 0), len([s for s in all_scans if s.get("status") == "Treated"]))
+    return jsonify(metrics), 200
 
 @app.route("/api/logs", methods=["GET", "POST", "OPTIONS"])
 def api_logs():
@@ -610,6 +765,12 @@ def predict():
             confidence_percent = confidences[pseudo_seed]
 
             rec = get_recommendation(predicted_label, fabric_context, image=image)
+            increment_scan_count(
+                stain_name=predicted_label,
+                fabric_name=f"{rec['fabric_color']} (100%)",
+                confidence=confidence_percent,
+                email=data.get("email")
+            )
             return jsonify({
                 "stain_classification": predicted_raw,
                 "fabric_material":      "Cotton",
@@ -640,6 +801,12 @@ def predict():
 
         # Retrieve dynamic recommendation based on stain and fabric context
         rec = get_recommendation(predicted_label, fabric_context, image=image)
+        increment_scan_count(
+            stain_name=predicted_label,
+            fabric_name=f"{rec['fabric_color']} (100%)",
+            confidence=confidence_percent,
+            email=data.get("email")
+        )
 
         print(f"Prediction: {predicted_raw} / {predicted_label} ({confidence_percent}% confidence) | "
               f"Fabric: {rec['fabric_color']} | Probs: {[round(float(p)*100,1) for p in probs]}")

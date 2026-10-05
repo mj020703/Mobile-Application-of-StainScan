@@ -1080,7 +1080,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     "Content-Type": "application/json"
                 },
                 body: JSON.stringify({
-                    image: selectedImageBase64
+                    image: selectedImageBase64,
+                    email: currentUser ? currentUser.email : "guest@stainscan.com"
                 })
             })
                 .then(res => {
@@ -1237,7 +1238,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         scanResultData = {
             id: "h_" + Math.random().toString(36).substr(2, 9),
-            email: currentUser.email,
+            email: currentUser ? currentUser.email : "guest@stainscan.com",
             stain: stain,
             fabric: fabricColor.includes("100%") ? fabricColor : `${fabricColor} (100%)`,
             fabric_color: fabricColor,
@@ -1575,6 +1576,22 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             } catch (apiError) {
                 console.warn("Could not sync treatment status to API (running local fallback):", apiError);
+            }
+
+            // 3. Post to dedicated /api/treatment-complete endpoint
+            try {
+                await fetch(DataStore.getApiUrl("/api/treatment-complete"), {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        scan_id: activeGuideScanId,
+                        email: currentUser ? currentUser.email : "guest@stainscan.com",
+                        timestamp: new Date().toISOString()
+                    })
+                });
+                console.log("Successfully posted /api/treatment-complete to server");
+            } catch (treatmentErr) {
+                console.warn("Could not post to /api/treatment-complete:", treatmentErr);
             }
 
             // Log activity to user actions list
