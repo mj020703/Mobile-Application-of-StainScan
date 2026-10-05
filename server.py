@@ -47,6 +47,11 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 def index():
     return app.send_static_file('index.html')
 
+@app.route("/admin")
+@app.route("/admin.html")
+def admin_page():
+    return app.send_static_file('admin.html')
+
 # --- Dynamic Fabric-Specific Stain Recommendations Database ---
 RECOMMENDATION_DATABASE = {
     "ballpen ink": {

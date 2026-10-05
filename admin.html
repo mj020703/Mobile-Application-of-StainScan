@@ -169,6 +169,33 @@
                             </div>
                         </div>
                     </div>
+                    <!-- Live Mobile Scans Feed Card -->
+                    <div class="dashboard-card pad-none" style="margin-top: 24px;">
+                        <div class="card-title-row pad-20" style="display:flex; justify-content:space-between; align-items:center;">
+                            <div>
+                                <h3>Live Mobile Scans Feed</h3>
+                                <p>Real-time stream of incoming stain classifications from connected mobile devices.</p>
+                            </div>
+                            <span class="live-status-pulse"><span class="pulse-dot"></span> Cloud Live</span>
+                        </div>
+                        <div class="table-container">
+                            <table class="admin-table">
+                                <thead>
+                                    <tr>
+                                        <th>Date & Time</th>
+                                        <th>User Email</th>
+                                        <th>Detected Stain</th>
+                                        <th>Fabric Detected</th>
+                                        <th>Confidence</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="liveScansTableBody">
+                                    <!-- Injected by js -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </section>
 
                 <!-- B. USERS LIST PANEL -->

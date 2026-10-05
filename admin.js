@@ -5,19 +5,16 @@
    ========================================================================== */
 
 const CONFIG = {
+    // Default directly to the production cloud backend (Render + MongoDB Atlas)
+    // where the mobile APK writes scans and treatments.
     API_BASE_URL: (() => {
-        if (typeof window === "undefined") return "https://stainscan-backend-gmbw.onrender.com";
-        const origin = window.location.origin || "";
-        const hostname = window.location.hostname || "";
-        // If explicitly running on local python development server in browser:
-        if (hostname === "localhost" || hostname === "127.0.0.1") {
-            return origin;
+        if (typeof window !== "undefined") {
+            const params = new URLSearchParams(window.location.search);
+            // Allow explicit local testing override if ?local=1 or ?backend=local is in the URL
+            if (params.get("backend") === "local" || params.get("local") === "1") {
+                return window.location.origin || "http://localhost:5000";
+            }
         }
-        // If hosted on Render or another web domain:
-        if (origin && !origin.startsWith("file:") && origin !== "null") {
-            return origin;
-        }
-        // Fallback for packaged mobile app (file://, WebView, APK):
         return "https://stainscan-backend-gmbw.onrender.com";
     })()
 };
@@ -313,6 +310,41 @@ document.addEventListener("DOMContentLoaded", () => {
             `;
             chartContainer.appendChild(barRow);
         });
+
+        // Render Live Mobile Scans Feed Table
+        const scansTableBody = document.getElementById("liveScansTableBody");
+        if (scansTableBody) {
+            scansTableBody.innerHTML = "";
+            if (!history || history.length === 0) {
+                scansTableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:24px; color:var(--text-muted);">No mobile scans logged yet. Perform a scan on your mobile phone to see it appear here!</td></tr>`;
+            } else {
+                // Show most recent scans first (up to 15)
+                const recentScans = [...history].reverse().slice(0, 15);
+                recentScans.forEach(scan => {
+                    const tr = document.createElement("tr");
+                    const dateStr = scan.timestamp ? new Date(scan.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : "Just now";
+                    const isTreated = scan.status === "Treated";
+                    const statusBadge = isTreated
+                        ? `<span class="badge badge-success"><i class="fas fa-check-circle"></i> Treated</span>`
+                        : `<span class="badge badge-warning"><i class="fas fa-clock"></i> Pending</span>`;
+                    
+                    let stainColor = "var(--primary-color)";
+                    if (scan.stain === "Used Cooking Oil") stainColor = "#f59e0b";
+                    else if (scan.stain === "Black Ballpen Ink") stainColor = "#3b82f6";
+                    else if (scan.stain === "Mud") stainColor = "#8b5cf6";
+
+                    tr.innerHTML = `
+                        <td>${dateStr}</td>
+                        <td><strong>${scan.email || "mobile_user"}</strong></td>
+                        <td><span style="font-weight:600; color:${stainColor};">${scan.stain || "Unknown"}</span></td>
+                        <td>${scan.fabric || "Cotton (100%)"}</td>
+                        <td><strong>${scan.confidence || 0}%</strong></td>
+                        <td>${statusBadge}</td>
+                    `;
+                    scansTableBody.appendChild(tr);
+                });
+            }
+        }
     }
 
     // --- REGISTERED USERS DIRECTORY PANELS ---

@@ -21,8 +21,14 @@ COPY requirements.txt .
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the server file and model weights
+# Copy web static assets, server file, and model weights
 COPY server.py .
+COPY admin.html .
+COPY admin.js .
+COPY index.html .
+COPY app.js .
+COPY style.css .
+COPY stainscan_logo.png .
 COPY stainscan_model_v3_balanced.keras .
 COPY stain_model.keras .
 COPY stainscan_model_v3_balanced.h5 .
