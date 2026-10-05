@@ -12,8 +12,9 @@ import certifi
 import numpy as np
 
 IMAGE_SIZE   = (224, 224)                 # Exact match with MobileNetV2 input shape
-MODEL_PATH   = "stainscan_model_v3_balanced.h5"  # Primary retrained model file
+MODEL_PATH   = "stainscan_model_v3_balanced.keras"  # Primary retrained model file
 LOADED_MODEL_FILE = None
+LAST_MODEL_ERROR = None
 CLASS_MAPPING_RAW = {
     0: "ballpen ink_cotton",
     1: "Cooking Oil_cotton",
@@ -685,7 +686,7 @@ def preprocess_image(pil_image: Image.Image) -> np.ndarray:
 
 
 def load_model(force_reload=False):
-    global model, LOADED_MODEL_FILE
+    global model, LOADED_MODEL_FILE, LAST_MODEL_ERROR
     if model is not None and not force_reload:
         return
 
@@ -695,41 +696,49 @@ def load_model(force_reload=False):
 
     candidate_paths = [
         MODEL_PATH,
-        "stain_model.h5",
-        "stainscan_model_v3_balanced.h5",
-        "stainscan_model.h5",
         "stainscan_model_v3_balanced.keras",
-        "stain_model.keras"
+        "stain_model.keras",
+        "stainscan_model_v3_balanced.h5",
+        "stain_model.h5",
+        "stainscan_model.h5"
     ]
-    actual_path = None
+
+    loaded_any = False
     for p in candidate_paths:
-        if os.path.exists(p):
-            actual_path = p
+        if not os.path.exists(p):
+            continue
+        print(f"Attempting model load from '{p}'...")
+        try:
+            loaded = keras.models.load_model(p, compile=False)
+            dummy = np.zeros((1,) + IMAGE_SIZE + (3,), dtype=np.float32)
+            loaded.predict(dummy, verbose=0)
+            model = loaded
+            LOADED_MODEL_FILE = p
+            LAST_MODEL_ERROR = None
+            loaded_any = True
+            print(f"Model loaded successfully from '{p}'. Input shape: {model.input_shape}")
             break
+        except Exception as e:
+            print(f"Error loading model from '{p}': {e}")
+            LAST_MODEL_ERROR = f"Failed '{p}': {type(e).__name__}: {str(e)}"
 
-    if actual_path is None:
-        print(f"Warning: Model file '{MODEL_PATH}' not found. Running in demo/fallback mode.")
-        return
-
-    print(f"Forcing clean model load from '{actual_path}'...")
-    try:
-        model = keras.models.load_model(actual_path, compile=False)
-        dummy = np.zeros((1,) + IMAGE_SIZE + (3,), dtype=np.float32)
-        model.predict(dummy, verbose=0)
-        LOADED_MODEL_FILE = actual_path
-        print(f"Model loaded successfully from '{actual_path}'. Input shape: {model.input_shape}")
-    except Exception as e:
-        print(f"Error loading model from '{actual_path}': {e}")
+    if not loaded_any:
+        print(f"Warning: No valid model could be loaded. Running in demo/fallback mode.")
         model = None
         LOADED_MODEL_FILE = None
 
+# Pre-load model at module import so workers are warm
+try:
+    load_model()
+except Exception as e:
+    print(f"Startup model pre-load exception: {e}")
 
 # CORS headers handled dynamically by Flask-CORS middleware
 
 @app.route("/health", methods=["GET"])
 def health_check():
     global model, LOADED_MODEL_FILE
-    if model is None and os.path.exists(MODEL_PATH):
+    if model is None:
         load_model()
     return jsonify({
         "status": "healthy" if model is not None else "degraded",
@@ -737,7 +746,8 @@ def health_check():
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
         "input_shape": list(model.input_shape) if (model is not None and hasattr(model, "input_shape")) else [None, 224, 224, 3],
-        "backend": "TensorFlow/Keras" if HAS_TF else "demo"
+        "backend": "TensorFlow/Keras" if HAS_TF else "demo",
+        "load_error": LAST_MODEL_ERROR
     })
 
 @app.route("/api/model-info", methods=["GET", "OPTIONS"])
@@ -760,7 +770,8 @@ def api_model_info():
         "output_shape": list(model.output_shape) if (model is not None and hasattr(model, "output_shape")) else [None, 3],
         "classes": CLASS_MAPPING_DISPLAY,
         "backend": "TensorFlow/Keras" if HAS_TF else "demo",
-        "model_size_bytes": file_size
+        "model_size_bytes": file_size,
+        "load_error": LAST_MODEL_ERROR
     }), 200
 
 @app.route("/predict", methods=["POST", "OPTIONS"])
