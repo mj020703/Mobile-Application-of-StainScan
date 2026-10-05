@@ -1236,8 +1236,14 @@ document.addEventListener("DOMContentLoaded", () => {
         const resultProcedureCard = document.getElementById("resultProcedureCard");
         const resultProcedureStepCount = document.getElementById("resultProcedureStepCount");
 
+        const serverAssignedId = (recommendation && recommendation.id)
+            ? recommendation.id
+            : ((recommendation && recommendation.recommendation && recommendation.recommendation.id)
+                ? recommendation.recommendation.id
+                : null);
+
         scanResultData = {
-            id: "h_" + Math.random().toString(36).substr(2, 9),
+            id: serverAssignedId || ("h_" + Math.random().toString(36).substr(2, 9)),
             email: currentUser ? currentUser.email : "guest@stainscan.com",
             stain: stain,
             fabric: fabricColor.includes("100%") ? fabricColor : `${fabricColor} (100%)`,
@@ -1295,7 +1301,16 @@ document.addEventListener("DOMContentLoaded", () => {
             document.getElementById("btnViewCleaningGuide").style.display = "inline-flex";
         }
 
-        DataStore.saveHistoryCloud(scanResultData);
+        // Save scan locally for user's history tab
+        const localHist = DataStore.getHistory();
+        localHist.unshift(scanResultData);
+        DataStore.saveHistory(localHist.slice(0, 10));
+
+        // If this was an offline simulated scan (no server-assigned ID), upload to cloud.
+        // If it was already classified and logged by the server's /predict API, do NOT duplicate it!
+        if (!serverAssignedId) {
+            DataStore.saveHistoryCloud(scanResultData);
+        }
         DataStore.addLog("info", `Successful CNN scan: ${stain} on ${fabric} (${confidence}% confidence)`);
 
         resultsCard.style.display = "block";
@@ -1566,19 +1581,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 console.warn(`Scan ID ${activeGuideScanId} not found in local history cache.`);
             }
 
-            // 2. Update cloud database via API
-            try {
-                const response = await DataStore.updateScanStatusCloud(activeGuideScanId, "Treated");
-                if (response && response.success) {
-                    console.log(`Cloud database updated successfully for scan ID: ${activeGuideScanId}`);
-                } else {
-                    console.warn(`Cloud update returned non-success for scan ID: ${activeGuideScanId}`, response);
-                }
-            } catch (apiError) {
-                console.warn("Could not sync treatment status to API (running local fallback):", apiError);
-            }
-
-            // 3. Post to dedicated /api/treatment-complete endpoint
+            // 2. Sync treatment completion directly to cloud API
             try {
                 await fetch(DataStore.getApiUrl("/api/treatment-complete"), {
                     method: "POST",

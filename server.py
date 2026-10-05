@@ -337,27 +337,35 @@ def increment_scan_count(stain_name=None, fabric_name=None, confidence=None, ema
     except Exception as e:
         print(f"Error logging scan record: {e}")
 
-    return metrics
+    return metrics, scan_id
 
 def increment_treatment_count(scan_id=None):
-    metrics = get_metrics()
-    metrics["successful_treatments"] = metrics.get("successful_treatments", 0) + 1
-    save_metrics(metrics)
-
+    # Guard against double counting: check if scan is already marked Treated
     if scan_id:
         try:
             if not is_demo_mode and db is not None:
                 from bson.objectid import ObjectId
                 query = {"$or": [{"_id": ObjectId(scan_id)}, {"id": scan_id}]} if ObjectId.is_valid(scan_id) else {"id": scan_id}
-                db["scans"].update_one(query, {"$set": {"status": "Treated"}})
+                existing_scan = db["scans"].find_one(query)
+                if existing_scan:
+                    if existing_scan.get("status") == "Treated":
+                        print(f"Scan {scan_id} is already marked Treated. Skipping duplicate increment.")
+                        return get_metrics()
+                    db["scans"].update_one(query, {"$set": {"status": "Treated"}})
             else:
                 s = next((x for x in mock_db["scans"] if x.get("id") == scan_id or x.get("_id") == scan_id), None)
                 if s:
+                    if s.get("status") == "Treated":
+                        print(f"Scan {scan_id} is already marked Treated (demo). Skipping duplicate increment.")
+                        return get_metrics()
                     s["status"] = "Treated"
                     _save_scans_file()
         except Exception as e:
-            print(f"Error updating scan status in increment_treatment_count: {e}")
+            print(f"Error checking/updating scan status in increment_treatment_count: {e}")
 
+    metrics = get_metrics()
+    metrics["successful_treatments"] = metrics.get("successful_treatments", 0) + 1
+    save_metrics(metrics)
     add_log("info", f"Treatment #{metrics['successful_treatments']} completed successfully (Scan ID: {scan_id or 'N/A'})")
     return metrics
 
@@ -568,6 +576,22 @@ def api_scans():
             "image": data.get("image", "")
         }
         
+        # Check if scan with this id already exists to prevent duplicate insertion
+        scan_id = data.get("id", "")
+        if scan_id:
+            existing = None
+            if not is_demo_mode and db is not None:
+                from bson.objectid import ObjectId
+                query = {"$or": [{"id": scan_id}, {"_id": ObjectId(scan_id)}]} if ObjectId.is_valid(scan_id) else {"id": scan_id}
+                existing = db["scans"].find_one(query)
+                if existing:
+                    existing["_id"] = str(existing["_id"])
+                    return jsonify(existing), 200
+            else:
+                existing = next((s for s in mock_db["scans"] if s.get("id") == scan_id), None)
+                if existing:
+                    return jsonify(existing), 200
+
         saved_scan = add_scan(new_scan)
         add_log("info", f"New stain scan logged for: {new_scan['email']} ({new_scan['stain']})")
         return jsonify(saved_scan), 201
@@ -905,13 +929,14 @@ def predict():
             confidence_percent = confidences[pseudo_seed]
 
             rec = get_recommendation(predicted_label, fabric_context, image=image)
-            increment_scan_count(
+            metrics, scan_id = increment_scan_count(
                 stain_name=predicted_label,
                 fabric_name=f"{rec['fabric_color']} (100%)",
                 confidence=confidence_percent,
                 email=data.get("email")
             )
             return jsonify({
+                "id":                   scan_id,
                 "stain_classification": predicted_raw,
                 "fabric_material":      "Cotton",
                 "fabric_color":         rec["fabric_color"],
@@ -922,6 +947,7 @@ def predict():
                 "caution":              rec["caution"],
                 "materials":            rec["materials"],
                 "recommendation": {
+                    "id": scan_id,
                     "steps": rec["steps"],
                     "caution": rec["caution"],
                     "materials": rec["materials"],
@@ -941,7 +967,7 @@ def predict():
 
         # Retrieve dynamic recommendation based on stain and fabric context
         rec = get_recommendation(predicted_label, fabric_context, image=image)
-        increment_scan_count(
+        metrics, scan_id = increment_scan_count(
             stain_name=predicted_label,
             fabric_name=f"{rec['fabric_color']} (100%)",
             confidence=confidence_percent,
@@ -953,6 +979,7 @@ def predict():
 
         # Return actual model prediction with fabric-specific steps and caution
         return jsonify({
+            "id":                   scan_id,
             "stain_classification": predicted_raw,
             "fabric_material":      "Cotton",
             "fabric_color":         rec["fabric_color"],
@@ -963,6 +990,7 @@ def predict():
             "caution":              rec["caution"],
             "materials":            rec["materials"],
             "recommendation": {
+                "id": scan_id,
                 "steps": rec["steps"],
                 "caution": rec["caution"],
                 "materials": rec["materials"],
