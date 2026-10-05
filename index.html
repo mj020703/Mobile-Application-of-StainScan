@@ -11,13 +11,28 @@
     <!-- Font Awesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=3.2">
 </head>
 <body>
     <!-- Main App Container mimicking a mobile screen layout on desktop -->
     <div class="app-frame">
         <div class="app-device">
 
+            <!-- App Top Header with Brand & Language Selector Toggle -->
+            <header class="app-top-header" id="appTopHeader">
+                <div class="top-header-brand">
+                    <img src="stainscan_logo.png" alt="StainScan Logo" class="top-header-logo">
+                    <span class="top-header-title">StainScan</span>
+                </div>
+                <div class="lang-switch-container">
+                    <div class="lang-toggle-pill" id="langToggle" role="group" aria-label="Language Selector">
+                        <i class="fas fa-globe lang-globe-icon"></i>
+                        <button type="button" class="lang-pill-btn active" data-lang="en" id="btnLangEn">EN</button>
+                        <span class="lang-pill-divider">|</span>
+                        <button type="button" class="lang-pill-btn" data-lang="hil" id="btnLangHil">HIL</button>
+                    </div>
+                </div>
+            </header>
 
             <!-- Screens Wrapper -->
             <main class="app-content">
@@ -28,36 +43,36 @@
                         <div class="auth-header">
                             <img src="stainscan_logo.png" alt="StainScan Logo" class="auth-logo-img">
                             <h2>StainScan</h2>
-                            <p id="auth-subtitle">AI-Powered Cotton Fabric Stain Care</p>
+                            <p id="auth-subtitle" data-i18n="auth_subtitle">AI-Powered Cotton Fabric Stain Care</p>
                         </div>
 
                         <!-- Login Form -->
                         <div id="auth-login-card" class="auth-card active">
                             <form id="loginForm">
                                 <div class="form-group">
-                                    <label for="login-email">Email Address</label>
+                                    <label for="login-email" data-i18n="label_email">Email Address</label>
                                     <div class="input-wrapper">
                                         <i class="far fa-envelope"></i>
-                                        <input type="email" id="login-email" required placeholder="name@email.com">
+                                        <input type="email" id="login-email" required placeholder="name@email.com" data-i18n-placeholder="placeholder_email">
                                     </div>
                                 </div>
                                 <div class="form-group">
-                                    <label for="login-password">Password</label>
+                                    <label for="login-password" data-i18n="label_password">Password</label>
                                     <div class="input-wrapper">
                                         <i class="fas fa-lock"></i>
-                                        <input type="password" id="login-password" required placeholder="••••••••">
+                                        <input type="password" id="login-password" required placeholder="••••••••" data-i18n-placeholder="placeholder_password">
                                     </div>
                                 </div>
                                 <div class="auth-actions">
-                                    <button type="button" class="text-link" id="btnGoForgot">Forgot Password?</button>
+                                    <button type="button" class="text-link" id="btnGoForgot" data-i18n="link_forgot_password">Forgot Password?</button>
                                 </div>
                                 <button type="submit" class="btn btn-primary btn-block">
-                                    <span>Sign In</span>
+                                    <span data-i18n="btn_sign_in">Sign In</span>
                                     <i class="fas fa-arrow-right"></i>
                                 </button>
                             </form>
                             <div class="auth-footer">
-                                <p>Don't have an account? <button class="text-link" id="btnGoRegister">Sign Up</button></p>
+                                <p><span data-i18n="text_dont_have_account">Don't have an account?</span> <button class="text-link" id="btnGoRegister" data-i18n="link_sign_up">Sign Up</button></p>
                             </div>
                         </div>
 
@@ -65,57 +80,57 @@
                         <div id="auth-register-card" class="auth-card">
                             <form id="registerForm">
                                 <div class="form-group">
-                                    <label for="reg-name">Full Name</label>
+                                    <label for="reg-name" data-i18n="label_fullname">Full Name</label>
                                     <div class="input-wrapper">
                                         <i class="far fa-user"></i>
-                                        <input type="text" id="reg-name" required placeholder="John Doe">
+                                        <input type="text" id="reg-name" required placeholder="John Doe" data-i18n-placeholder="placeholder_fullname">
                                     </div>
                                 </div>
                                 <div class="form-group">
-                                    <label for="reg-email">Email Address</label>
+                                    <label for="reg-email" data-i18n="label_email">Email Address</label>
                                     <div class="input-wrapper">
                                         <i class="far fa-envelope"></i>
-                                        <input type="email" id="reg-email" required placeholder="name@email.com">
+                                        <input type="email" id="reg-email" required placeholder="name@email.com" data-i18n-placeholder="placeholder_email">
                                     </div>
                                 </div>
                                 <div class="form-group">
-                                    <label for="reg-password">Password</label>
+                                    <label for="reg-password" data-i18n="label_password">Password</label>
                                     <div class="input-wrapper">
                                         <i class="fas fa-lock"></i>
-                                        <input type="password" id="reg-password" required placeholder="Min 6 characters">
+                                        <input type="password" id="reg-password" required placeholder="Min 6 characters" data-i18n-placeholder="placeholder_min_password">
                                     </div>
                                 </div>
                                 <div class="form-group checkbox-group">
                                     <input type="checkbox" id="reg-terms" required>
-                                    <label for="reg-terms">I agree to the Terms & Privacy Policy</label>
+                                    <label for="reg-terms" data-i18n="label_terms">I agree to the Terms & Privacy Policy</label>
                                 </div>
                                 <button type="submit" class="btn btn-primary btn-block">
-                                    <span>Create Account</span>
+                                    <span data-i18n="btn_create_account">Create Account</span>
                                     <i class="fas fa-user-plus"></i>
                                 </button>
                             </form>
                             <div class="auth-footer">
-                                <p>Already have an account? <button class="text-link" id="btnGoLogin">Sign In</button></p>
+                                <p><span data-i18n="text_already_have_account">Already have an account?</span> <button class="text-link" id="btnGoLogin" data-i18n="btn_sign_in">Sign In</button></p>
                             </div>
                         </div>
 
                         <!-- Recovery Form -->
                         <div id="auth-recovery-card" class="auth-card">
                             <form id="recoveryForm">
-                                <p class="card-info-text">Enter your email address and we'll send you instructions to reset your password.</p>
+                                <p class="card-info-text" data-i18n="text_recovery_info">Enter your email address and we'll send you instructions to reset your password.</p>
                                 <div class="form-group">
-                                    <label for="recover-email">Email Address</label>
+                                    <label for="recover-email" data-i18n="label_email">Email Address</label>
                                     <div class="input-wrapper">
                                         <i class="far fa-envelope"></i>
-                                        <input type="email" id="recover-email" required placeholder="name@email.com">
+                                        <input type="email" id="recover-email" required placeholder="name@email.com" data-i18n-placeholder="placeholder_email">
                                     </div>
                                 </div>
                                 <button type="submit" class="btn btn-primary btn-block">
-                                    <span>Send Reset Link</span>
+                                    <span data-i18n="btn_send_reset">Send Reset Link</span>
                                     <i class="fas fa-paper-plane"></i>
                                 </button>
                                 <button type="button" class="btn btn-secondary btn-block" id="btnBackToLogin">
-                                    <span>Back to Login</span>
+                                    <span data-i18n="btn_back_to_login">Back to Login</span>
                                 </button>
                             </form>
                         </div>
@@ -128,17 +143,17 @@
                         <!-- Greeting -->
                         <div class="user-greeting">
                             <h2>Hello, <span id="dashboardUserName">User</span> 👋</h2>
-                            <p>Let's save your cotton fabrics today.</p>
+                            <p data-i18n="dashboard_greeting">Let's save your cotton fabrics today.</p>
                         </div>
 
                         <!-- Fast Scan Banner Card -->
                         <div class="scan-banner">
                             <div class="banner-content">
-                                <h3>Identify Stains Instantly</h3>
-                                <p>Scan cotton garments to identify Mud, Cooking Oil, or Pen Ink and get cleaning recipes.</p>
+                                <h3 data-i18n="banner_title">Identify Stains Instantly</h3>
+                                <p data-i18n="banner_desc">Scan cotton garments to identify Mud, Cooking Oil, or Pen Ink and get cleaning recipes.</p>
                                 <button class="btn btn-white" id="btnQuickScan">
                                     <i class="fas fa-camera"></i>
-                                    <span>Start Scanning</span>
+                                    <span data-i18n="btn_start_scanning">Start Scanning</span>
                                 </button>
                             </div>
                             <div class="banner-illustration">
@@ -152,27 +167,27 @@
                                 <div class="stat-icon orange"><i class="fas fa-clock-rotate-left"></i></div>
                                 <div class="stat-info">
                                     <span class="stat-value" id="statTotalScans">0</span>
-                                    <span class="stat-label">Total Scans</span>
+                                    <span class="stat-label" data-i18n="stat_total_scans">Total Scans</span>
                                 </div>
                             </div>
                             <div class="stat-card">
                                 <div class="stat-icon green"><i class="fas fa-shield-halved"></i></div>
                                 <div class="stat-info">
                                     <span class="stat-value" id="statSavedGarments">0</span>
-                                    <span class="stat-label">Stains Treated</span>
+                                    <span class="stat-label" data-i18n="stat_stains_treated">Stains Treated</span>
                                 </div>
                             </div>
                         </div>
 
                         <!-- Recents Section -->
                         <div class="section-header">
-                            <h3>Recent Activity</h3>
-                            <button class="text-link" id="btnViewAllHistory">View All</button>
+                            <h3 data-i18n="recent_activity">Recent Activity</h3>
+                            <button class="text-link" id="btnViewAllHistory" data-i18n="link_view_all">View All</button>
                         </div>
                         <div class="recent-scans-list" id="dashboardRecentList">
                             <div class="empty-state">
                                 <i class="fas fa-folder-open"></i>
-                                <p>No scans performed yet. Try scanning a stain!</p>
+                                <p data-i18n="empty_recent">No scans performed yet. Try scanning a stain!</p>
                             </div>
                         </div>
 
@@ -180,8 +195,8 @@
                         <div class="pro-tips-card">
                             <div class="tip-icon"><i class="far fa-lightbulb"></i></div>
                             <div class="tip-content">
-                                <h4>Pro Tip for Cotton Fabrics</h4>
-                                <p>Always treat stains as early as possible. Fresh stains are significantly easier to extract than dried-in stains.</p>
+                                <h4 data-i18n="pro_tip_title">Pro Tip for Cotton Fabrics</h4>
+                                <p data-i18n="pro_tip_desc">Always treat stains as early as possible. Fresh stains are significantly easier to extract than dried-in stains.</p>
                             </div>
                         </div>
                     </div>
@@ -191,8 +206,8 @@
                 <section id="screen-scan" class="app-screen">
                     <div class="scan-wrap">
                         <div class="section-title-wrap">
-                            <h2>Analyze Fabric Stain</h2>
-                            <p>Upload a clear photo of your stained cotton garment.</p>
+                            <h2 data-i18n="scan_title">Analyze Fabric Stain</h2>
+                            <p data-i18n="scan_subtitle">Upload a clear photo of your stained cotton garment.</p>
                         </div>
 
                         <!-- Image Upload Area -->
@@ -202,9 +217,9 @@
                                 <div class="upload-icon-pulse">
                                     <i class="fas fa-cloud-arrow-up"></i>
                                 </div>
-                                <h3>Tap to Select Photo</h3>
-                                <p>Or drag and drop image here</p>
-                                <span class="upload-limits">JPG, PNG up to 10MB (Cotton Fabrics)</span>
+                                <h3 data-i18n="upload_tap">Tap to Select Photo</h3>
+                                <p data-i18n="upload_drag">Or drag and drop image here</p>
+                                <span class="upload-limits" data-i18n="upload_limits">JPG, PNG up to 10MB (Cotton Fabrics)</span>
                             </div>
                             <div class="upload-preview-state" id="uploadPreviewState" style="display: none;">
                                 <img id="uploadedImagePreview" src="" alt="Garment Preview">
@@ -219,7 +234,7 @@
                         <div class="scan-controls" id="scanControls" style="display: none;">
                             <button class="btn btn-primary btn-block" id="btnAnalyzeStain">
                                 <i class="fas fa-wand-magic-sparkles"></i>
-                                <span>Begin Intelligent CNN Analysis</span>
+                                <span data-i18n="btn_analyze">Begin Intelligent CNN Analysis</span>
                             </button>
                         </div>
 
@@ -228,29 +243,26 @@
                             <div class="glass-loader">
                                 <div class="pulse-ring"></div>
                                 <div class="cortex-spinner"></div>
-                                <h3 id="loaderStatusText">Preprocessing Image...</h3>
-                                <p id="loaderSubtext">Reducing background noise and resizing fabric details</p>
-                                <div class="progress-bar-wrap">
-                                    <div class="progress-bar-fill" id="progressBarFill"></div>
-                                </div>
+                                <h3 id="loaderStatusText" data-i18n="loader_preprocessing">Preprocessing Image...</h3>
+                                <p id="loaderSubtext" data-i18n="loader_reducing_noise">Reducing background noise and resizing fabric details</p>
                             </div>
                         </div>
 
                         <!-- Analysis Results Card -->
                         <div class="results-card" id="resultsCard" style="display: none;">
-                            <div class="results-badge"><i class="fas fa-check-circle"></i> Detection Successful</div>
+                            <div class="results-badge"><i class="fas fa-check-circle"></i> <span data-i18n="badge_detection_successful">Detection Successful</span></div>
                             
                             <div class="result-details">
                                 <div class="result-detail-item">
-                                    <span class="detail-label">Stain Classification</span>
+                                    <span class="detail-label" data-i18n="stain_classification">Stain Classification</span>
                                     <span class="detail-val highlight" id="resultStainType">Used Cooking Oil</span>
                                 </div>
                                 <div class="result-detail-item">
-                                    <span class="detail-label">Fabric Material</span>
+                                    <span class="detail-label" data-i18n="fabric_material">Fabric Color & Material</span>
                                     <span class="detail-val" id="resultFabricType">Cotton Fabric (100%)</span>
                                 </div>
                                 <div class="result-detail-item">
-                                    <span class="detail-label">CNN Confidence</span>
+                                    <span class="detail-label" data-i18n="cnn_confidence">CNN Confidence</span>
                                     <div class="confidence-indicator">
                                         <span class="detail-val" id="resultConfidence">85%</span>
                                         <div class="confidence-track">
@@ -260,19 +272,41 @@
                                 </div>
                             </div>
 
-                            <div class="safety-warning-banner" id="safetyBanner">
-                                <i class="fas fa-shield-heart"></i>
-                                <span>Fabric Safety: Verified safe to treat using water-based/neutral methods.</span>
+                            <!-- Highlighted Safety Caution Card -->
+                            <div class="result-caution-card" id="resultCautionCard">
+                                <div class="caution-card-header">
+                                    <div class="caution-icon-badge">
+                                        <i class="fas fa-triangle-exclamation"></i>
+                                    </div>
+                                    <div class="caution-title-group">
+                                        <span class="caution-tag" data-i18n="safety_precaution">SAFETY PRECAUTION</span>
+                                        <h4 id="resultCautionTitle">Fabric Treatment Alert</h4>
+                                    </div>
+                                </div>
+                                <p class="caution-card-body" id="resultCautionText">
+                                    Do not use chlorine bleach directly on ink spots, as it can fix the pigment into cotton fibers.
+                                </p>
+                            </div>
+
+                            <!-- Recommended Cleaning Procedure Card -->
+                            <div class="result-procedure-card" id="resultProcedureCard">
+                                <div class="procedure-card-header">
+                                    <div class="procedure-header-left">
+                                        <i class="fas fa-list-check"></i>
+                                        <h4 data-i18n="recommended_procedure">Recommended Cleaning Procedure</h4>
+                                    </div>
+                                    <span class="procedure-step-count" id="resultProcedureStepCount">4 Steps</span>
+                                </div>
+                                <button class="btn btn-primary btn-block" id="btnViewCleaningGuide">
+                                    <i class="fas fa-clipboard-check"></i>
+                                    <span data-i18n="btn_open_checklist">Open Interactive Checklist</span>
+                                </button>
                             </div>
 
                             <div class="results-actions">
-                                <button class="btn btn-primary btn-block" id="btnViewCleaningGuide">
-                                    <span>View Cleaning Guide</span>
-                                    <i class="fas fa-chevron-right"></i>
-                                </button>
                                 <button class="btn btn-secondary btn-block" id="btnRestartScan">
                                     <i class="fas fa-rotate-left"></i>
-                                    <span>Scan Another Garment</span>
+                                    <span data-i18n="btn_scan_another">Scan Another Garment</span>
                                 </button>
                             </div>
                         </div>
@@ -283,21 +317,21 @@
                 <section id="screen-history" class="app-screen">
                     <div class="history-wrap">
                         <div class="section-title-wrap">
-                            <h2>Scan History Log</h2>
-                            <p>Review and track your previous stain treatment plans.</p>
+                            <h2 data-i18n="history_title">Scan History Log</h2>
+                            <p data-i18n="history_subtitle">Review and track your previous stain treatment plans.</p>
                         </div>
 
                         <!-- Filter and Search -->
                         <div class="history-controls">
                             <div class="search-box">
                                 <i class="fas fa-magnifying-glass"></i>
-                                <input type="text" id="historySearch" placeholder="Search stains or fabric...">
+                                <input type="text" id="historySearch" placeholder="Search stains or fabric..." data-i18n-placeholder="placeholder_history_search">
                             </div>
                             <div class="filter-chips">
-                                <button class="chip active" data-filter="all">All</button>
-                                <button class="chip" data-filter="Used Cooking Oil">Oil</button>
-                                <button class="chip" data-filter="Black Ballpen Ink">Ink</button>
-                                <button class="chip" data-filter="Mud">Mud</button>
+                                <button class="chip active" data-filter="all" data-i18n="filter_all">All</button>
+                                <button class="chip" data-filter="Used Cooking Oil" data-i18n="filter_oil">Oil</button>
+                                <button class="chip" data-filter="Black Ballpen Ink" data-i18n="filter_ink">Ink</button>
+                                <button class="chip" data-filter="Mud" data-i18n="filter_mud">Mud</button>
                             </div>
                         </div>
 
@@ -321,27 +355,27 @@
                         </div>
 
                         <div class="settings-list">
-                            <h4>Account Options</h4>
+                            <h4 data-i18n="account_options">Account Options</h4>
                             <div class="settings-item" id="btnEditProfile">
                                 <div class="settings-item-label">
                                     <i class="far fa-user-circle"></i>
-                                    <span>Edit Personal Details</span>
+                                    <span data-i18n="btn_edit_profile">Edit Personal Details</span>
                                 </div>
                                 <i class="fas fa-chevron-right"></i>
                             </div>
                             <div class="settings-item" id="btnChangePassword">
                                 <div class="settings-item-label">
                                     <i class="fas fa-lock-open"></i>
-                                    <span>Change Password</span>
+                                    <span data-i18n="btn_change_password">Change Password</span>
                                 </div>
                                 <i class="fas fa-chevron-right"></i>
                             </div>
 
-                            <h4>System Settings</h4>
+                            <h4 data-i18n="system_settings">System Settings</h4>
                             <div class="settings-item">
                                 <div class="settings-item-label">
                                     <i class="far fa-bell"></i>
-                                    <span>Notification Alerts</span>
+                                    <span data-i18n="notification_alerts">Notification Alerts</span>
                                 </div>
                                 <label class="switch">
                                     <input type="checkbox" checked>
@@ -352,7 +386,7 @@
 
                         <button class="btn btn-logout btn-block" id="btnLogout">
                             <i class="fas fa-power-off"></i>
-                            <span>Sign Out</span>
+                            <span data-i18n="btn_sign_out">Sign Out</span>
                         </button>
                     </div>
                 </section>
@@ -362,21 +396,21 @@
             <nav class="app-nav-bar" id="appNavBar" style="display: none;">
                 <button class="nav-item active" data-screen="screen-dashboard">
                     <i class="fas fa-house-chimney"></i>
-                    <span>Home</span>
+                    <span data-i18n="nav_home">Home</span>
                 </button>
                 <button class="nav-item" data-screen="screen-scan">
                     <div class="scan-nav-circle">
                         <i class="fas fa-camera"></i>
                     </div>
-                    <span>Scan</span>
+                    <span data-i18n="nav_scan">Scan</span>
                 </button>
                 <button class="nav-item" data-screen="screen-history">
                     <i class="fas fa-clock-rotate-left"></i>
-                    <span>History</span>
+                    <span data-i18n="nav_history">History</span>
                 </button>
                 <button class="nav-item" data-screen="screen-profile">
                     <i class="fas fa-user-circle"></i>
-                    <span>Profile</span>
+                    <span data-i18n="nav_profile">Profile</span>
                 </button>
             </nav>
         </div>
@@ -402,7 +436,7 @@
                 <div class="form-group">
                     <label for="sim-fabric">Simulated Fabric Classification</label>
                     <select id="sim-fabric" class="form-select">
-                        <option value="Cotton Fabric (100%)">Cotton Fabric (100%)</option>
+                        <option value="Cotton Fabric (100%)" selected>Cotton Fabric (100%)</option>
                         <option value="Polyester Mix">Polyester Mix (Unsupported)</option>
                         <option value="Silk Fabric">Silk Fabric (Unsupported)</option>
                     </select>
@@ -432,8 +466,8 @@
         </div>
 
         <!-- Recommendations Detailed Checklist Modal -->
-        <div class="guide-modal-overlay" id="guideModal" style="display: none;">
-            <div class="guide-modal-card">
+        <div class="guide-modal-overlay interactive-checklist-modal modal" id="guideModal" style="display: none;">
+            <div class="guide-modal-card modal-content">
                 <div class="guide-modal-header">
                     <h3 id="modalStainName">Used Cooking Oil Removal Guide</h3>
                     <button class="btn-close-modal" id="btnCloseModal" title="Close Guide"><i class="fas fa-times"></i></button>
@@ -441,23 +475,32 @@
                 <div class="guide-modal-body">
                     <div class="fabric-safety-status-modal">
                         <i class="fas fa-shield-halved"></i>
-                        <span>Approved Treatment Plan for <strong>Cotton Fabric</strong></span>
+                        <span id="modalFabricSafetyText">Approved Treatment Plan for <strong>Cotton Fabric</strong></span>
                     </div>
 
-                    <h4>Required Materials</h4>
+                    <!-- Highlighted Modal Caution Alert -->
+                    <div class="modal-caution-card" id="modalCautionBox">
+                        <div class="modal-caution-badge"><i class="fas fa-triangle-exclamation"></i></div>
+                        <div class="modal-caution-content">
+                            <strong data-i18n="safety_precaution_label">Safety Precaution:</strong>
+                            <p id="modalCautionText">Do not use chlorine bleach directly on ink spots.</p>
+                        </div>
+                    </div>
+
+                    <h4 data-i18n="modal_materials">Required Materials</h4>
                     <ul class="materials-list-chips" id="modalMaterialsList">
                         <!-- Chips injected by JS -->
                     </ul>
 
-                    <h4>Interactive Cleaning Steps</h4>
-                    <p class="guide-step-tip">Check off steps as you complete them to track your treatment progress.</p>
+                    <h4 data-i18n="modal_steps">Interactive Cleaning Steps</h4>
+                    <p class="guide-step-tip" data-i18n="modal_step_tip">Check off steps as you complete them to track your treatment progress.</p>
                     
                     <div class="interactive-steps-container" id="modalStepsList">
                         <!-- Checklist items injected by JS -->
                     </div>
 
                     <div class="progress-footer-row">
-                        <span>Garment Restoration Progress</span>
+                        <span data-i18n="modal_restoration_progress">Garment Restoration Progress</span>
                         <strong id="modalProgressPercent">0%</strong>
                     </div>
                     <div class="modal-progress-bar">
@@ -465,18 +508,18 @@
                     </div>
                 </div>
                 <div class="guide-modal-footer">
-                    <button class="btn btn-secondary" id="btnCancelModal">Close Guide</button>
+                    <button class="btn btn-secondary" id="btnCancelModal" data-i18n="btn_close_guide">Close Guide</button>
                     <button class="btn btn-primary" id="btnCompleteTreatment">
                         <i class="fas fa-circle-check"></i>
-                        <span>Mark Treatment Completed</span>
+                        <span data-i18n="btn_mark_treatment_completed">Mark Treatment Completed</span>
                     </button>
                 </div>
             </div>
         </div>
 
         <!-- Edit Profile Modal -->
-        <div class="guide-modal-overlay" id="editProfileModal" style="display: none;">
-            <div class="guide-modal-card">
+        <div class="guide-modal-overlay modal" id="editProfileModal" style="display: none;">
+            <div class="guide-modal-card modal-content">
                 <div class="guide-modal-header">
                     <h3>Edit Personal Details</h3>
                     <button class="btn-close-modal" id="btnCloseEditProfileModal" title="Close"><i class="fas fa-times"></i></button>
@@ -510,8 +553,8 @@
         </div>
 
         <!-- Change Password Modal -->
-        <div class="guide-modal-overlay" id="changePasswordModal" style="display: none;">
-            <div class="guide-modal-card">
+        <div class="guide-modal-overlay modal" id="changePasswordModal" style="display: none;">
+            <div class="guide-modal-card modal-content">
                 <div class="guide-modal-header">
                     <h3>Change Password</h3>
                     <button class="btn-close-modal" id="btnCloseChangePasswordModal" title="Close"><i class="fas fa-times"></i></button>
@@ -545,10 +588,28 @@
         </div>
     </div>
 
+    <!-- Animated App Launch Splash Screen -->
+    <div id="splash-screen" class="splash-screen-overlay">
+        <div class="splash-card">
+            <div class="splash-logo-card">
+                <img src="stainscan_logo.png" alt="StainScan Logo" class="splash-logo-img">
+                <div class="splash-scan-beam"></div>
+            </div>
+            <div class="splash-neural-badge">
+                <i class="fas fa-microchip"></i>
+                <span>StainScan AI Core</span>
+            </div>
+            <p id="splash-status">Initializing StainScan System...</p>
+            <div class="splash-progress-track">
+                <div class="splash-progress-bar"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Notifications -->
     <div class="toast-container" id="toastContainer"></div>
 
     <!-- App JavaScript -->
-    <script src="app.js?v=2.3"></script>
+    <script src="app.js?v=3.1"></script>
 </body>
 </html>

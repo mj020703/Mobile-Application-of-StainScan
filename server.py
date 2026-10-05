@@ -1,122 +1,183 @@
 import base64
 from io import BytesIO
 import os
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 from datetime import datetime
 from PIL import Image
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
 import certifi
+import numpy as np
 
-# Load configuration same as training
-IMAGE_SIZE = (224, 224)
-MODEL_PATH_PTH = "stainscan_model.pth"
-CLASS_MAPPING = {
+IMAGE_SIZE   = (224, 224)                 # Exact match with MobileNetV2 input shape
+MODEL_PATH   = "stain_model.h5"           # Primary model file (MobileNetV2 transfer learning)
+CLASS_MAPPING_RAW = {
+    0: "ballpen ink_cotton",
+    1: "Cooking Oil_cotton",
+    2: "Mud_cotton"
+}
+
+CLASS_MAPPING_DISPLAY = {
     0: "Black Ballpen Ink",
     1: "Used Cooking Oil",
     2: "Mud"
 }
 
-# Try importing torch/torchvision conditionally to support immediate fallback execution
+# Try importing TensorFlow/Keras
 try:
-    import torch
-    import torch.nn as nn
-    import torchvision.transforms as transforms
-    HAS_TORCH = True
+    import tensorflow as tf
+    from tensorflow import keras
+    from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
+    HAS_TF = True
 except ModuleNotFoundError:
-    print("PyTorch libraries not found. Backend API will run in Numpy/Demo Fallback mode.")
-    HAS_TORCH = False
+    print("TensorFlow not found. Prediction API will run in demo/fallback mode.")
+    HAS_TF = False
 
-if HAS_TORCH:
-    # Define the CNN architecture (must match train.py)
-    class MobileNetV2Stain(nn.Module):
-        def __init__(self, num_classes=3, pretrained=False):
-            super(MobileNetV2Stain, self).__init__()
-            import torchvision.models as models
-            self.base_model = models.mobilenet_v2()
-            
-            # Modify first conv layer to accept 5 input channels
-            original_conv = self.base_model.features[0][0]
-            new_conv = nn.Conv2d(
-                in_channels=5,
-                out_channels=original_conv.out_channels,
-                kernel_size=original_conv.kernel_size,
-                stride=original_conv.stride,
-                padding=original_conv.padding,
-                dilation=original_conv.dilation,
-                groups=original_conv.groups,
-                bias=original_conv.bias is not None
-            )
-            self.base_model.features[0][0] = new_conv
-            
-            in_features = self.base_model.classifier[1].in_features
-            self.base_model.classifier[1] = nn.Linear(in_features, num_classes)
 
-        def forward(self, x):
-            return self.base_model(x)
-
-    # Device config
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Custom transform block to stack HSV Saturation & Value channels onto RGB channels
-    class AddHSVChannels(object):
-        def __call__(self, img):
-            rgb_tensor = transforms.ToTensor()(img)
-            hsv_img = img.convert("HSV")
-            hsv_tensor = transforms.ToTensor()(hsv_img)
-            s_channel = hsv_tensor[1:2, :, :]
-            v_channel = hsv_tensor[2:3, :, :]
-            x_5ch = torch.cat([rgb_tensor, s_channel, v_channel], dim=0)
-            return x_5ch
-
-    # Validation Transforms (must match training exactly)
-    inference_transform = transforms.Compose([
-        transforms.Resize(IMAGE_SIZE),
-        AddHSVChannels(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406, 0.5, 0.5], std=[0.229, 0.224, 0.225, 0.5, 0.5])
-    ])
-else:
-    device = "cpu"
 
 # Initialize Flask App
-app = Flask(__name__)
+app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# --- Default Knowledge Base Recommendations ---
-DEFAULT_KB = {
-    "Used Cooking Oil": {
-        "materials": ["Liquid Dish Soap", "Warm Water", "Microfiber Cloth", "Baking Soda"],
-        "steps": [
-            "Blot the excess oil immediately using a clean paper towel. Do not rub, as this spreads the oil.",
-            "Apply a generous amount of liquid dish soap directly to the stained area. Dish soap is designed to cut grease.",
-            "Gently work the soap into the cotton fabric fibers with a soft cloth or toothbrush in circular motions.",
-            "Let it stand for 5-10 minutes to allow the soap to break down the oil structure.",
-            "Rinse the area thoroughly with warm water to flush out the grease-soap emulsion.",
-            "Launder standardly at the highest safe temperature for the garment, then check the area before machine drying."
-        ]
+@app.route("/")
+def index():
+    return app.send_static_file('index.html')
+
+# --- Dynamic Fabric-Specific Stain Recommendations Database ---
+RECOMMENDATION_DATABASE = {
+    "ballpen ink": {
+        "white": {
+            "stain": "Black Ballpen Ink",
+            "fabric_color": "White Cotton",
+            "materials": ["Paper Towels / Clean Cloth", "70% Isopropyl Alcohol", "Cotton Swab", "Liquid Laundry Detergent", "Oxygen Bleach"],
+            "steps": [
+                "Place a paper towel or clean cloth underneath the stained area.",
+                "Dab 70% Isopropyl Alcohol onto a cotton swab and blot gently from the outer edges inward.",
+                "Apply liquid laundry detergent directly to the stain and let sit for 5-10 minutes.",
+                "Rinse thoroughly with cold water, then machine wash in warm water with oxygen bleach."
+            ],
+            "caution": "Do not use chlorine bleach directly on ink spots, as it can fix the pigment into cotton fibers."
+        },
+        "grey": {
+            "stain": "Black Ballpen Ink",
+            "fabric_color": "Grey Cotton",
+            "materials": ["Paper Towels", "70% Isopropyl Alcohol", "Clean Cloth", "Color-Safe Liquid Detergent"],
+            "steps": [
+                "Turn garment inside out and place paper towel under the front.",
+                "Dab 70% Isopropyl Alcohol on a cloth and gently blot the reverse side to push ink out.",
+                "Apply color-safe liquid detergent directly to the spot.",
+                "Rinse with cool water and wash on a cool cycle with color-safe detergent."
+            ],
+            "caution": "Do not use acetone or chlorine bleach on grey fabric, as it will strip the dye."
+        }
     },
-    "Black Ballpen Ink": {
-        "materials": ["Isopropyl Alcohol", "Cotton Balls", "Absorbent Towels", "Liquid Detergent"],
-        "steps": [
-            "Place an absorbent paper towel directly underneath the stained layer of the fabric to catch bleeding ink.",
-            "Dab the stain generously using a cotton ball saturated with isopropyl alcohol.",
-            "Blot repeatedly, switching to fresh cotton balls as they absorb the ink. Do not scrub, blot only.",
-            "Rinse the stained fabric section thoroughly with cold water to remove the alcohol.",
-            "Rub a small amount of liquid detergent into any remaining faint ink outline.",
-            "Wash immediately in a regular laundry cycle, verifying the stain is gone before applying heat drying."
-        ]
+    "cooking oil": {
+        "white": {
+            "stain": "Used Cooking Oil",
+            "fabric_color": "White Cotton",
+            "materials": ["Baking Soda / Cornstarch", "Concentrated Liquid Dish Soap", "Hot Water", "Clean Brush / Cloth"],
+            "steps": [
+                "Sprinkle baking soda or cornstarch on fresh oil for 10-15 minutes to absorb surface lipid, then brush away.",
+                "Apply concentrated liquid dish soap directly onto the stain.",
+                "Gently work soap into fibers and let sit for 15 minutes.",
+                "Rinse with hot water, then wash in warm water."
+            ],
+            "caution": "Ensure stain is fully removed before machine drying; heat permanently sets oil."
+        },
+        "grey": {
+            "stain": "Used Cooking Oil",
+            "fabric_color": "Grey Cotton",
+            "materials": ["Mild Liquid Dish Soap", "Soft-Bristled Brush / Clean Cloth", "Lukewarm Water", "Color-Safe Detergent"],
+            "steps": [
+                "Dab mild liquid dish soap directly onto the grease spot.",
+                "Softly work soap into the fabric using a soft-bristled brush or clean cloth.",
+                "Let sit for 10-15 minutes to break down grease.",
+                "Rinse with lukewarm water and wash in a standard warm cycle with color-safe detergent."
+            ],
+            "caution": "Avoid aggressive scrubbing to prevent color fading or fuzzing on grey cotton."
+        }
     },
-    "Mud": {
-        "materials": ["Laundry Brush", "Liquid Laundry Detergent", "Warm Water", "White Vinegar"],
-        "steps": [
-            "Allow the mud to dry completely. Attempting to clean wet mud will rub dirt deeper into cotton fibers.",
-            "Scrape or brush off dry mud crust using a stiff-bristled brush.",
-            "Pre-treat the remaining dirt spots with a small amount of liquid laundry detergent.",
-            "Rub the fabric together gently under warm running water to release dirt particles.",
-            "For stubborn brown mud stains, mix equal parts warm water and white vinegar, sponge the area, and let sit for 10 minutes.",
-            "Rinse clean and launder normally in a warm wash cycle."
-        ]
+    "mud": {
+        "white": {
+            "stain": "Mud",
+            "fabric_color": "White Cotton",
+            "materials": ["Dull Knife or Brush", "Oxygen Bleach", "Warm Water", "Liquid Laundry Detergent"],
+            "steps": [
+                "Allow mud to dry completely (never clean wet mud).",
+                "Gently scrape off hardened top crust with a dull knife or brush.",
+                "Pre-soak in warm water with oxygen bleach for 30 minutes.",
+                "Apply liquid detergent directly to remaining marks and machine wash warm."
+            ],
+            "caution": "Washing wet mud forces fine clay deep into fabric weave."
+        },
+        "grey": {
+            "stain": "Mud",
+            "fabric_color": "Grey Cotton",
+            "materials": ["Soft-Bristle Brush", "Color-Safe Liquid Detergent", "Cool Water"],
+            "steps": [
+                "Allow mud to dry completely.",
+                "Gently brush off dry surface crust using a soft-bristle brush.",
+                "Pre-soak in cool water mixed with color-safe liquid detergent for 20-30 minutes.",
+                "Lightly rub remaining marks with liquid detergent and wash on a cool cycle."
+            ],
+            "caution": "Use cool water pre-soaks to prevent fine soil particles from setting into colored fabric."
+        }
     }
+}
+
+def detect_fabric_color_from_image(pil_image: Image.Image) -> str:
+    """
+    Detects whether the cotton fabric is White or Grey based on central crop luminance.
+    """
+    try:
+        w, h = pil_image.size
+        crop_box = (int(w * 0.15), int(h * 0.15), int(w * 0.85), int(h * 0.85))
+        cropped = pil_image.crop(crop_box).convert("L")
+        mean_lum = float(np.mean(np.array(cropped)))
+        return "Grey Cotton" if mean_lum < 165 else "White Cotton"
+    except Exception:
+        return "White Cotton"
+
+def get_recommendation(stain_name: str, fabric_color_or_type: str = None, image: Image.Image = None) -> dict:
+    """
+    Looks up fabric-specific cleaning steps and safety caution based on stain class
+    and fabric color/type.
+    """
+    stain_str = str(stain_name or "").lower()
+    if "ballpen" in stain_str or "ink" in stain_str:
+        stain_key = "ballpen ink"
+    elif "oil" in stain_str or "cooking" in stain_str:
+        stain_key = "cooking oil"
+    elif "mud" in stain_str:
+        stain_key = "mud"
+    else:
+        stain_key = "cooking oil"
+
+    color_str = str(fabric_color_or_type or "").lower().strip()
+    if "grey" in color_str or "gray" in color_str:
+        color_key = "grey"
+    elif "white" in color_str:
+        color_key = "white"
+    elif image is not None:
+        detected = detect_fabric_color_from_image(image)
+        color_key = "grey" if "grey" in detected.lower() else "white"
+    else:
+        color_key = "white"
+
+    rec = RECOMMENDATION_DATABASE[stain_key][color_key]
+    return rec
+
+DEFAULT_KB = {
+    "Black Ballpen Ink (White Cotton)": RECOMMENDATION_DATABASE["ballpen ink"]["white"],
+    "Black Ballpen Ink (Grey Cotton)": RECOMMENDATION_DATABASE["ballpen ink"]["grey"],
+    "Used Cooking Oil (White Cotton)": RECOMMENDATION_DATABASE["cooking oil"]["white"],
+    "Used Cooking Oil (Grey Cotton)": RECOMMENDATION_DATABASE["cooking oil"]["grey"],
+    "Mud (White Cotton)": RECOMMENDATION_DATABASE["mud"]["white"],
+    "Mud (Grey Cotton)": RECOMMENDATION_DATABASE["mud"]["grey"],
+    "Black Ballpen Ink": RECOMMENDATION_DATABASE["ballpen ink"]["white"],
+    "Used Cooking Oil": RECOMMENDATION_DATABASE["cooking oil"]["white"],
+    "Mud": RECOMMENDATION_DATABASE["mud"]["white"]
 }
 
 # Initialize MongoDB
@@ -265,6 +326,20 @@ def api_kb():
         add_log("info", "Knowledge base recipes updated by admin")
         return jsonify({"success": True, "message": "Knowledge base updated successfully"})
     return jsonify(get_kb())
+
+@app.route("/api/recommendation", methods=["GET", "POST", "OPTIONS"])
+def api_recommendation():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+    if request.method == "POST":
+        data = request.get_json() or {}
+        stain = data.get("stain") or data.get("stain_class") or "Used Cooking Oil"
+        fabric = data.get("fabric_color") or data.get("fabric_type") or data.get("fabric") or "White Cotton"
+    else:
+        stain = request.args.get("stain") or request.args.get("stain_class") or "Used Cooking Oil"
+        fabric = request.args.get("fabric_color") or request.args.get("fabric_type") or request.args.get("fabric") or "White Cotton"
+    return jsonify(get_recommendation(stain, fabric))
+
 
 @app.route("/api/register", methods=["POST", "OPTIONS"])
 def api_register():
@@ -415,115 +490,185 @@ def api_logs():
         return jsonify({"success": True})
     return jsonify(get_logs())
 
-# Global variables for model
+# ── Global model handle ───────────────────────────────────────────────────────
 model = None
 
-def load_model():
-    global model
-    if model is not None:
-        return
-        
-    print(f"Loading trained weights from {MODEL_PATH_PTH}...")
-    if not HAS_TORCH:
-        print("Warning: PyTorch not installed. Prediction API will run in demo/fallback mode.")
-        return
-        
-    if not os.path.exists(MODEL_PATH_PTH):
-        print(f"Warning: Trained weights file '{MODEL_PATH_PTH}' not found. Prediction API will run in demo/fallback mode.")
-        return
-        
+def apply_clahe(img_rgb: np.ndarray, clip_limit: float = 2.0) -> np.ndarray:
+    """
+    Applies Contrast Limited Adaptive Histogram Equalization (CLAHE) on the L channel
+    in CIELAB color space, matching the dynamic contrast training pipeline.
+    """
     try:
-        model = MobileNetV2Stain(num_classes=3)
-        # Load weights on the correct device
-        state_dict = torch.load(MODEL_PATH_PTH, map_location=device, weights_only=True)
-        model.load_state_dict(state_dict)
-        model.to(device)
-        model.eval()
-        print("Model loaded successfully and set to evaluation mode.")
+        import cv2
+        lab = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+        cl = clahe.apply(l)
+        return cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2RGB)
+    except Exception:
+        return img_rgb
+
+
+def preprocess_image(pil_image: Image.Image) -> np.ndarray:
+    """
+    Preprocess a PIL image to match the MobileNetV2 transfer learning pipeline:
+      1. Convert to RGB color space
+      2. Resize to IMAGE_SIZE (224x224) using Bilinear interpolation
+      3. Apply CIELAB CLAHE dynamic contrast equalization
+      4. Apply MobileNetV2 preprocess_input to scale pixel values to [-1.0, 1.0]
+      5. Expand batch dimension -> shape (1, 224, 224, 3)
+    """
+    img = pil_image.convert("RGB").resize(IMAGE_SIZE, Image.BILINEAR)
+    arr = np.array(img, dtype=np.uint8)
+    enhanced = apply_clahe(arr)
+    if HAS_TF:
+        arr_norm = preprocess_input(enhanced.astype(np.float32))
+    else:
+        arr_norm = (enhanced.astype(np.float32) / 127.5) - 1.0
+    return np.expand_dims(arr_norm, axis=0)   # (1, 224, 224, 3)
+
+
+def load_model(force_reload=False):
+    global model
+    if model is not None and not force_reload:
+        return
+
+    if not HAS_TF:
+        print("Warning: TensorFlow not installed. Prediction API will run in demo/fallback mode.")
+        return
+
+    candidate_paths = [MODEL_PATH, "stainscan_model.h5", "stain_model.keras", "stainscan_model_v3_balanced.h5", "stainscan_model_v3_balanced.keras"]
+    actual_path = None
+    for p in candidate_paths:
+        if os.path.exists(p):
+            actual_path = p
+            break
+
+    if actual_path is None:
+        print(f"Warning: Model file '{MODEL_PATH}' not found. Running in demo/fallback mode.")
+        return
+
+    print(f"Forcing clean model load from '{actual_path}'...")
+    try:
+        model = keras.models.load_model(actual_path, compile=False)
+        dummy = np.zeros((1,) + IMAGE_SIZE + (3,), dtype=np.float32)
+        model.predict(dummy, verbose=0)
+        print(f"Model loaded successfully from '{actual_path}'. Input shape: {model.input_shape}")
     except Exception as e:
-        print(f"Error loading model: {e}")
+        print(f"Error loading model from '{actual_path}': {e}")
         model = None
+
 
 # CORS headers handled dynamically by Flask-CORS middleware
 
 @app.route("/health", methods=["GET"])
 def health_check():
     global model
-    # Reload model if weights became available later
-    if model is None and os.path.exists(MODEL_PATH_PTH):
+    if model is None and os.path.exists(MODEL_PATH):
         load_model()
     return jsonify({
         "status": "healthy",
         "model_loaded": model is not None,
-        "device": str(device)
+        "model_file": MODEL_PATH,
+        "backend": "TensorFlow/Keras" if HAS_TF else "demo"
     })
 
 @app.route("/predict", methods=["POST", "OPTIONS"])
 def predict():
-    # Handle preflight options requests
     if request.method == "OPTIONS":
         return jsonify({"status": "ok"})
-        
+
     global model
-    # Proactively check/reload model weights
     if model is None:
         load_model()
-        
-    # Get request JSON data
+
     data = request.get_json()
     if not data or "image" not in data:
         return jsonify({"error": "No image data provided in the request payload."}), 400
-        
+
     base64_str = data["image"]
-    
-    # Strip base64 headers if present
     if "," in base64_str:
         base64_str = base64_str.split(",")[1]
-        
+
+    # Check fabric color / type in request context
+    fabric_context = data.get("fabric_color") or data.get("fabric_type") or data.get("fabric") or ""
+
     try:
-        # Decode base64 image
         image_bytes = base64.b64decode(base64_str)
         image = Image.open(BytesIO(image_bytes)).convert("RGB")
-        
-        # Fallback if model hasn't been trained yet
+
+        # Demo/fallback mode when model is unavailable
         if model is None:
             print("Server running in Demo/Simulation Fallback mode.")
-            # Simple fallback heuristic based on image size to provide simulated variation
             img_w, img_h = image.size
             pseudo_seed = (img_w + img_h) % 3
             stains = ["Black Ballpen Ink", "Used Cooking Oil", "Mud"]
+            raw_stains = ["ballpen ink_cotton", "Cooking Oil_cotton", "Mud_cotton"]
             confidences = [89, 92, 85]
+            predicted_raw = raw_stains[pseudo_seed]
+            predicted_label = stains[pseudo_seed]
+            confidence_percent = confidences[pseudo_seed]
+
+            rec = get_recommendation(predicted_label, fabric_context, image=image)
             return jsonify({
-                "stain": stains[pseudo_seed],
-                "fabric": "Cotton Fabric (100%)",
-                "confidence": confidences[pseudo_seed],
-                "message": "Demo prediction (model weights not found)"
+                "stain_classification": predicted_raw,
+                "fabric_material":      "Cotton",
+                "fabric_color":         rec["fabric_color"],
+                "confidence":           confidence_percent,
+                "stain":                predicted_label,
+                "fabric":               f"{rec['fabric_color']} (100%)",
+                "steps":                rec["steps"],
+                "caution":              rec["caution"],
+                "materials":            rec["materials"],
+                "recommendation": {
+                    "steps": rec["steps"],
+                    "caution": rec["caution"],
+                    "materials": rec["materials"],
+                    "fabric_color": rec["fabric_color"]
+                },
+                "message":              "Demo prediction (model file not found)"
             })
-            
-        # Run inference
-        image_tensor = inference_transform(image).unsqueeze(0).to(device)
-        with torch.no_grad():
-            outputs = model(image_tensor)
-            probabilities = torch.softmax(outputs, dim=1)[0]
-            confidence_val, predicted_idx = torch.max(probabilities, 0)
-            
-        confidence_percent = int(confidence_val.item() * 100)
-        predicted_label = CLASS_MAPPING.get(predicted_idx.item(), "Unknown Stain")
-        
-        print(f"Prediction successful: {predicted_label} ({confidence_percent}% confidence)")
-        
+
+        # Preprocess and run TensorFlow inference
+        input_arr   = preprocess_image(image)              # (1, 224, 224, 3)
+        predictions = model.predict(input_arr, verbose=0)  # (1, 3) softmax probabilities
+        probs       = predictions[0]                        # (3,)
+        predicted_idx    = int(np.argmax(probs))
+        confidence_percent = int(round(float(probs[predicted_idx]) * 100))
+        predicted_raw    = CLASS_MAPPING_RAW.get(predicted_idx, "Unknown")
+        predicted_label  = CLASS_MAPPING_DISPLAY.get(predicted_idx, predicted_raw)
+
+        # Retrieve dynamic recommendation based on stain and fabric context
+        rec = get_recommendation(predicted_label, fabric_context, image=image)
+
+        print(f"Prediction: {predicted_raw} / {predicted_label} ({confidence_percent}% confidence) | "
+              f"Fabric: {rec['fabric_color']} | Probs: {[round(float(p)*100,1) for p in probs]}")
+
+        # Return actual model prediction with fabric-specific steps and caution
         return jsonify({
-            "stain": predicted_label,
-            "fabric": "Cotton Fabric (100%)",
-            "confidence": confidence_percent
+            "stain_classification": predicted_raw,
+            "fabric_material":      "Cotton",
+            "fabric_color":         rec["fabric_color"],
+            "confidence":           confidence_percent,
+            "stain":                predicted_label,
+            "fabric":               f"{rec['fabric_color']} (100%)",
+            "steps":                rec["steps"],
+            "caution":              rec["caution"],
+            "materials":            rec["materials"],
+            "recommendation": {
+                "steps": rec["steps"],
+                "caution": rec["caution"],
+                "materials": rec["materials"],
+                "fabric_color": rec["fabric_color"]
+            }
         })
-        
+
     except Exception as e:
         print(f"Inference error: {e}")
         return jsonify({"error": f"Failed to process image: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    load_model()
+    load_model(force_reload=True)
     # Run server dynamically binding to port from environment variable
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)

@@ -5,7 +5,7 @@
    ========================================================================== */
 
 const CONFIG = {
-    API_BASE_URL: "https://stainscan-backend-gmbw.onrender.com"
+    API_BASE_URL: (typeof window !== "undefined" && window.location.origin && window.location.origin !== "null" && !window.location.origin.startsWith("file:")) ? window.location.origin : "http://localhost:5000"
 };
 
 class AdminDataStore {

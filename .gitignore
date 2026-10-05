@@ -8,6 +8,14 @@ Mud_cotton/
 *.png
 *.PNG
 
+*.keras
+*.npz
+*.log
+*.exe
+__pycache__/
+*.pyc
+DataSet/
+
 # Allow tracking weights and logo
 !stainscan_model.pth
 !stainscan_logo.png
