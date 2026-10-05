@@ -685,6 +685,23 @@ def preprocess_image(pil_image: Image.Image) -> np.ndarray:
     return np.expand_dims(arr_norm, axis=0)   # (1, 224, 224, 3)
 
 
+if HAS_TF:
+    class SafeGlorotUniform(keras.initializers.GlorotUniform):
+        def __init__(self, seed=None, **kwargs):
+            super().__init__(seed=seed)
+
+    CUSTOM_MODEL_OBJECTS = {
+        "GlorotUniform": SafeGlorotUniform,
+        "GlorotNormal": keras.initializers.GlorotNormal
+    }
+    try:
+        keras.saving.get_custom_objects()["GlorotUniform"] = SafeGlorotUniform
+        keras.saving.get_custom_objects()["GlorotNormal"] = keras.initializers.GlorotNormal
+    except Exception:
+        pass
+else:
+    CUSTOM_MODEL_OBJECTS = {}
+
 def load_model(force_reload=False):
     global model, LOADED_MODEL_FILE, LAST_MODEL_ERROR
     if model is not None and not force_reload:
@@ -709,7 +726,7 @@ def load_model(force_reload=False):
             continue
         print(f"Attempting model load from '{p}'...")
         try:
-            loaded = keras.models.load_model(p, compile=False)
+            loaded = keras.models.load_model(p, compile=False, custom_objects=CUSTOM_MODEL_OBJECTS)
             dummy = np.zeros((1,) + IMAGE_SIZE + (3,), dtype=np.float32)
             loaded.predict(dummy, verbose=0)
             model = loaded
