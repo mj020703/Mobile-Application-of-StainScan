@@ -5,7 +5,21 @@
    ========================================================================== */
 
 const CONFIG = {
-    API_BASE_URL: (typeof window !== "undefined" && window.location.origin && window.location.origin !== "null" && !window.location.origin.startsWith("file:")) ? window.location.origin : "http://localhost:5000"
+    API_BASE_URL: (() => {
+        if (typeof window === "undefined") return "https://stainscan-backend-gmbw.onrender.com";
+        const origin = window.location.origin || "";
+        const hostname = window.location.hostname || "";
+        // If explicitly running on local python development server in browser:
+        if (hostname === "localhost" || hostname === "127.0.0.1") {
+            return origin;
+        }
+        // If hosted on Render or another web domain:
+        if (origin && !origin.startsWith("file:") && origin !== "null") {
+            return origin;
+        }
+        // Fallback for packaged mobile app (file://, WebView, APK):
+        return "https://stainscan-backend-gmbw.onrender.com";
+    })()
 };
 
 class AdminDataStore {
