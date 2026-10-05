@@ -9,7 +9,5 @@ pymongo==4.7.2
 dnspython==2.6.1
 certifi==2024.7.4
 
-# PyTorch CPU version (optimizes memory usage and reduces package size on free tiers)
---find-links https://download.pytorch.org/whl/cpu/torch_stable.html
-torch==2.3.0+cpu
-torchvision==0.18.0+cpu
+# TensorFlow CPU version for lightweight model inference on cloud hosting
+tensorflow-cpu>=2.15.0
