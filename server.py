@@ -699,6 +699,23 @@ if HAS_TF:
         keras.saving.get_custom_objects()["GlorotNormal"] = keras.initializers.GlorotNormal
     except Exception:
         pass
+
+    try:
+        def _patch_init(cls):
+            orig_init = cls.__init__
+            def patched_init(self, *args, **kwargs):
+                kwargs.pop("input_axes", None)
+                kwargs.pop("output_axes", None)
+                orig_init(self, *args, **kwargs)
+            cls.__init__ = patched_init
+
+        _patch_init(keras.initializers.GlorotUniform)
+        _patch_init(keras.initializers.GlorotNormal)
+        import keras.src.initializers.random_initializers as kri
+        _patch_init(kri.GlorotUniform)
+        _patch_init(kri.GlorotNormal)
+    except Exception as e:
+        print(f"Warning setting initializer patch: {e}")
 else:
     CUSTOM_MODEL_OBJECTS = {}
 
