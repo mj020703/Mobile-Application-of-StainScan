@@ -711,11 +711,44 @@ if HAS_TF:
 
         _patch_init(keras.initializers.GlorotUniform)
         _patch_init(keras.initializers.GlorotNormal)
-        import keras.src.initializers.random_initializers as kri
-        _patch_init(kri.GlorotUniform)
-        _patch_init(kri.GlorotNormal)
+        try:
+            import keras.src.initializers.random_initializers as kri
+            _patch_init(kri.GlorotUniform)
+            _patch_init(kri.GlorotNormal)
+        except Exception:
+            pass
+
+        def _patch_bn(cls):
+            orig_init = cls.__init__
+            def patched_bn_init(self, *args, **kwargs):
+                kwargs.pop("renorm", None)
+                kwargs.pop("renorm_clipping", None)
+                kwargs.pop("renorm_momentum", None)
+                orig_init(self, *args, **kwargs)
+            cls.__init__ = patched_bn_init
+
+        _patch_bn(keras.layers.BatchNormalization)
+        try:
+            import keras.src.layers.normalization.batch_normalization as kbn
+            _patch_bn(kbn.BatchNormalization)
+        except Exception:
+            pass
+
+        def _patch_input(cls):
+            orig_init = cls.__init__
+            def patched_input_init(self, *args, **kwargs):
+                kwargs.pop("optional", None)
+                orig_init(self, *args, **kwargs)
+            cls.__init__ = patched_input_init
+
+        _patch_input(keras.layers.InputLayer)
+        try:
+            import keras.src.layers.core.input_layer as kil
+            _patch_input(kil.InputLayer)
+        except Exception:
+            pass
     except Exception as e:
-        print(f"Warning setting initializer patch: {e}")
+        print(f"Warning setting compatibility patches: {e}")
 else:
     CUSTOM_MODEL_OBJECTS = {}
 
