@@ -719,8 +719,10 @@ if HAS_TF:
 else:
     CUSTOM_MODEL_OBJECTS = {}
 
+CANDIDATE_ERRORS = {}
+
 def load_model(force_reload=False):
-    global model, LOADED_MODEL_FILE, LAST_MODEL_ERROR
+    global model, LOADED_MODEL_FILE, LAST_MODEL_ERROR, CANDIDATE_ERRORS
     if model is not None and not force_reload:
         return
 
@@ -740,6 +742,7 @@ def load_model(force_reload=False):
     loaded_any = False
     for p in candidate_paths:
         if not os.path.exists(p):
+            CANDIDATE_ERRORS[p] = "File does not exist"
             continue
         print(f"Attempting model load from '{p}'...")
         try:
@@ -749,12 +752,15 @@ def load_model(force_reload=False):
             model = loaded
             LOADED_MODEL_FILE = p
             LAST_MODEL_ERROR = None
+            CANDIDATE_ERRORS[p] = "SUCCESS"
             loaded_any = True
             print(f"Model loaded successfully from '{p}'. Input shape: {model.input_shape}")
             break
         except Exception as e:
             print(f"Error loading model from '{p}': {e}")
-            LAST_MODEL_ERROR = f"Failed '{p}': {type(e).__name__}: {str(e)}"
+            err_msg = f"{type(e).__name__}: {str(e)}"
+            CANDIDATE_ERRORS[p] = err_msg
+            LAST_MODEL_ERROR = f"Failed '{p}': {err_msg}"
 
     if not loaded_any:
         print(f"Warning: No valid model could be loaded. Running in demo/fallback mode.")
@@ -805,7 +811,10 @@ def api_model_info():
         "classes": CLASS_MAPPING_DISPLAY,
         "backend": "TensorFlow/Keras" if HAS_TF else "demo",
         "model_size_bytes": file_size,
-        "load_error": LAST_MODEL_ERROR
+        "load_error": LAST_MODEL_ERROR,
+        "candidate_errors": CANDIDATE_ERRORS,
+        "tf_version": tf.__version__ if HAS_TF else None,
+        "keras_version": keras.__version__ if HAS_TF else None
     }), 200
 
 @app.route("/predict", methods=["POST", "OPTIONS"])
