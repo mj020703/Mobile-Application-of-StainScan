@@ -15,12 +15,9 @@ const CONFIG = {
 
         const origin = window.location.origin || "";
 
-        // 1. Allow explicit developer override (?backend=live or ?backend=local)
+        // 1. Allow explicit developer override (?backend=local or ?local=1)
         try {
             const params = new URLSearchParams(window.location.search);
-            if (params.get("backend") === "live") {
-                return LIVE_RENDER_BACKEND;
-            }
             if (params.get("backend") === "local" || params.get("local") === "1") {
                 return (origin && !origin.startsWith("file:") && origin !== "null") ? origin : "http://localhost:5000";
             }
@@ -30,12 +27,13 @@ const CONFIG = {
             }
         } catch (_) {}
 
-        // 2. Use same origin when served via HTTP/HTTPS (whether hosted on Render or local dev server)
-        if (origin && !origin.startsWith("file:") && origin !== "null") {
+        // 2. When hosted on Render, use same origin
+        if (origin && origin.includes("onrender.com")) {
             return origin;
         }
 
-        // Fallback for packaged/file environment
+        // Default to live cloud backend (Render + MongoDB Atlas) so opening admin.html locally
+        // immediately reflects scans, treatments, and metrics coming from mobile APK users in real time.
         return LIVE_RENDER_BACKEND;
     })()
 };
