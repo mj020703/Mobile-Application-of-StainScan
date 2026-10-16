@@ -4,18 +4,39 @@
    localStorage database, recipe modifications, and analytics updates.
    ========================================================================== */
 
+const LIVE_RENDER_BACKEND = "https://stainscan-backend-gmbw.onrender.com";
+
 const CONFIG = {
-    // Default directly to the production cloud backend (Render + MongoDB Atlas)
-    // where the mobile APK writes scans and treatments.
+    // Production cloud backend (Render + MongoDB Atlas) where the mobile APK writes scans and treatments.
+    // By default, the admin portal always connects to the live cloud deployment so that scans
+    // from mobile APK users across any network (cellular data or separate Wi-Fi) appear immediately.
     API_BASE_URL: (() => {
-        if (typeof window !== "undefined") {
+        if (typeof window === "undefined") return LIVE_RENDER_BACKEND;
+
+        const origin = window.location.origin || "";
+
+        // 1. Allow explicit developer override (?backend=live or ?backend=local)
+        try {
             const params = new URLSearchParams(window.location.search);
-            // Allow explicit local testing override if ?local=1 or ?backend=local is in the URL
-            if (params.get("backend") === "local" || params.get("local") === "1") {
-                return window.location.origin || "http://localhost:5000";
+            if (params.get("backend") === "live") {
+                return LIVE_RENDER_BACKEND;
             }
+            if (params.get("backend") === "local" || params.get("local") === "1") {
+                return (origin && !origin.startsWith("file:") && origin !== "null") ? origin : "http://localhost:5000";
+            }
+            const explicitBackend = params.get("backend");
+            if (explicitBackend && explicitBackend.startsWith("http")) {
+                return explicitBackend.replace(/\/+$/, "");
+            }
+        } catch (_) {}
+
+        // 2. Use same origin when served via HTTP/HTTPS (whether hosted on Render or local dev server)
+        if (origin && !origin.startsWith("file:") && origin !== "null") {
+            return origin;
         }
-        return "https://stainscan-backend-gmbw.onrender.com";
+
+        // Fallback for packaged/file environment
+        return LIVE_RENDER_BACKEND;
     })()
 };
 
@@ -74,11 +95,12 @@ class AdminDataStore {
     }
 
     static async getMetrics() {
-        try {
-            const res = await fetch(this.getApiUrl("/api/metrics"));
-            if (res.ok) return await res.json();
-        } catch (e) {
-            console.warn("Failed to fetch metrics from cloud:", e);
+        const endpoints = ["/api/stats", "/api/admin/overview", "/api/metrics"];
+        for (const ep of endpoints) {
+            try {
+                const res = await fetch(this.getApiUrl(ep));
+                if (res.ok) return await res.json();
+            } catch (_) {}
         }
         return null;
     }
@@ -150,6 +172,28 @@ document.addEventListener("DOMContentLoaded", () => {
         }, 3000);
     }
 
+    // --- Dynamic Button Loading State ---
+    function setButtonLoading(button, isLoading, loadingText = "Signing in...") {
+        if (!button) return;
+        if (isLoading) {
+            if (!button.dataset.originalHtml) {
+                button.dataset.originalHtml = button.innerHTML;
+            }
+            button.disabled = true;
+            button.classList.add("btn-loading");
+            button.setAttribute("aria-busy", "true");
+            button.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>${loadingText}</span>`;
+        } else {
+            button.disabled = false;
+            button.classList.remove("btn-loading");
+            button.removeAttribute("aria-busy");
+            if (button.dataset.originalHtml) {
+                button.innerHTML = button.dataset.originalHtml;
+            }
+        }
+    }
+    window.setButtonLoading = setButtonLoading;
+
     // --- Tab Router Navigation ---
     function navigateToTab(tabId) {
         // Toggle Active Menu Button
@@ -194,15 +238,27 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- ADMIN AUTHENTICATION GATES ---
     document.getElementById("adminLoginForm").addEventListener("submit", (e) => {
         e.preventDefault();
+        const submitBtn = document.getElementById("btnAdminLoginSubmit") || document.querySelector("#adminLoginForm button[type='submit']");
         const email = document.getElementById("admin-email").value.trim().toLowerCase();
         const password = document.getElementById("admin-password").value;
+
+        setButtonLoading(submitBtn, true, "Signing in...");
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
 
         fetch(AdminDataStore.getApiUrl("/api/login"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, password })
+            body: JSON.stringify({ email, password }),
+            signal: controller.signal
         })
         .then(res => {
+            clearTimeout(timeoutId);
+            const contentType = res.headers.get("content-type");
+            if (!contentType || !contentType.includes("application/json")) {
+                throw new Error("Unable to connect to the backend service. Please check server connection.");
+            }
             if (!res.ok) {
                 return res.json().then(err => { throw new Error(err.error || "Login failed"); });
             }
@@ -221,12 +277,24 @@ document.addEventListener("DOMContentLoaded", () => {
                 
                 showToast(`Access granted. Welcome, ${matched.name}!`);
                 renderOverview();
+                document.getElementById("adminLoginForm").reset();
             } else {
                 showToast("Access Denied. Account does not possess System Admin role.", "error");
             }
         })
         .catch(err => {
-            showToast(err.message || "Invalid credentials entered. Try again.", "error");
+            clearTimeout(timeoutId);
+            let message = err.message || "Invalid credentials entered. Try again.";
+            if (err.name === "AbortError" || err.name === "TimeoutError") {
+                message = "Server request timed out. Please check your connection and try again.";
+            } else if (err.name === "TypeError" && (err.message === "Failed to fetch" || err.message.includes("NetworkError"))) {
+                message = "Network error: Unable to connect to backend server. Please verify your connection.";
+            }
+            showToast(message, "error");
+        })
+        .finally(() => {
+            clearTimeout(timeoutId);
+            setButtonLoading(submitBtn, false);
         });
     });
 
@@ -249,16 +317,30 @@ document.addEventListener("DOMContentLoaded", () => {
             AdminDataStore.getMetrics()
         ]);
 
-        // Totals counting
-        const totalUsers = users.length;
-        const totalScans = (metrics && typeof metrics.total_scans === "number")
-            ? Math.max(metrics.total_scans, history.length)
-            : history.length;
+        // 1. Registered Mobile Users: strictly count users with role === 'user' or role !== 'admin'
+        const mobileUsersList = users.filter(u => u.role === "user" || u.role !== "admin");
+        const totalUsers = (metrics && typeof metrics.registered_mobile_users === "number")
+            ? metrics.registered_mobile_users
+            : ((metrics && typeof metrics.totalUsersCount === "number")
+                ? metrics.totalUsersCount
+                : ((metrics && typeof metrics.total_users === "number")
+                    ? metrics.total_users
+                    : mobileUsersList.length));
 
+        // 2. Total CNN Scans Run: query from backend stats or scans/history collection
         const treatedFromHistory = history.filter(h => h.status === "Treated").length;
+        const totalScans = (metrics && typeof metrics.total_scans === "number")
+            ? metrics.total_scans
+            : ((metrics && typeof metrics.totalScansCount === "number")
+                ? metrics.totalScansCount
+                : history.length);
+
+        // 3. Successful Treatments: query from backend stats or treated scans in history
         const totalTreated = (metrics && typeof metrics.successful_treatments === "number")
-            ? Math.max(metrics.successful_treatments, treatedFromHistory)
-            : treatedFromHistory;
+            ? metrics.successful_treatments
+            : ((metrics && typeof metrics.totalTreatedCount === "number")
+                ? metrics.totalTreatedCount
+                : treatedFromHistory);
 
         const totalUsersEl = document.getElementById("totalUsersCount");
         const totalScansEl = document.getElementById("totalScansCount");
@@ -279,7 +361,8 @@ document.addEventListener("DOMContentLoaded", () => {
             "Mud": 0
         };
 
-        if (metrics && metrics.stain_counts) {
+        // If history has items, compute distribution
+        if (history.length > 0 && metrics && metrics.stain_counts) {
             Object.keys(counts).forEach(k => {
                 if (typeof metrics.stain_counts[k] === "number") {
                     counts[k] = metrics.stain_counts[k];
@@ -287,11 +370,13 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         }
 
-        history.forEach(item => {
-            if (counts[item.stain] !== undefined && (!metrics || !metrics.stain_counts)) {
-                counts[item.stain]++;
-            }
-        });
+        if (history.length > 0) {
+            history.forEach(item => {
+                if (counts[item.stain] !== undefined && (!metrics || !metrics.stain_counts)) {
+                    counts[item.stain]++;
+                }
+            });
+        }
 
         const total = Object.values(counts).reduce((a, b) => a + b, 0);
 

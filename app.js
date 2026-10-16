@@ -5,21 +5,29 @@
    ========================================================================== */
 
 // --- Backend API URL Configuration ---
+const LIVE_RENDER_BACKEND = "https://stainscan-backend-gmbw.onrender.com";
+
 const CONFIG = {
+    // Strictly points to the live Render backend (Render + MongoDB Atlas cloud cluster)
+    // ensuring mobile APK builds, emulators, WebViews, and web browsers communicate with the production server.
     API_BASE_URL: (() => {
-        if (typeof window === "undefined") return "https://stainscan-backend-gmbw.onrender.com";
-        const origin = window.location.origin || "";
-        const hostname = window.location.hostname || "";
-        // If explicitly running on local python development server in browser:
-        if (hostname === "localhost" || hostname === "127.0.0.1") {
-            return origin;
-        }
-        // If hosted on Render or another web domain:
-        if (origin && !origin.startsWith("file:") && origin !== "null") {
-            return origin;
-        }
-        // Fallback for packaged mobile app (file://, WebView, APK):
-        return "https://stainscan-backend-gmbw.onrender.com";
+        if (typeof window === "undefined") return LIVE_RENDER_BACKEND;
+
+        // Allow explicit developer override for offline local testing (?backend=local or ?local=1)
+        try {
+            const params = new URLSearchParams(window.location.search);
+            if (params.get("backend") === "local" || params.get("local") === "1") {
+                const origin = window.location.origin || "";
+                return (origin && !origin.startsWith("file:") && origin !== "null") ? origin : "http://localhost:5000";
+            }
+            const explicitBackend = params.get("backend");
+            if (explicitBackend && explicitBackend.startsWith("http")) {
+                return explicitBackend.replace(/\/+$/, "");
+            }
+        } catch (_) {}
+
+        // Production default: always communicate directly with live Render server
+        return LIVE_RENDER_BACKEND;
     })()
 };
 
@@ -217,6 +225,7 @@ const I18N = {
             placeholder_password: "••••••••",
             link_forgot_password: "Forgot Password?",
             btn_sign_in: "Sign In",
+            btn_signing_in: "Signing in...",
             text_dont_have_account: "Don't have an account?",
             link_sign_up: "Sign Up",
             label_fullname: "Full Name",
@@ -296,6 +305,7 @@ const I18N = {
             placeholder_password: "••••••••",
             link_forgot_password: "Nalipatan ang Password?",
             btn_sign_in: "Mag-sulod (Sign In)",
+            btn_signing_in: "Naga-sulod (Signing in)...",
             text_dont_have_account: "Wala ka pa account?",
             link_sign_up: "Mag-rehistro (Sign Up)",
             label_fullname: "Bilog nga Ngalan",
@@ -640,6 +650,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let selectedImageBase64 = null;
     let scanResultData = null;
     let activeGuideScanId = null;
+    let activeGuideItem = null;
 
     // --- DOM Elements Cache ---
     const appTopHeader = document.getElementById("appTopHeader");
@@ -686,6 +697,31 @@ document.addEventListener("DOMContentLoaded", () => {
             setTimeout(() => toast.remove(), 300);
         }, 3000);
     }
+
+    // --- Dynamic Button Loading State ---
+    function setButtonLoading(button, isLoading, loadingText = "Signing in...") {
+        if (!button) return;
+        if (isLoading) {
+            if (!button.dataset.originalHtml) {
+                button.dataset.originalHtml = button.innerHTML;
+            }
+            button.disabled = true;
+            button.classList.add("btn-loading");
+            button.setAttribute("aria-busy", "true");
+            button.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>${loadingText}</span>`;
+        } else {
+            button.disabled = false;
+            button.classList.remove("btn-loading");
+            button.removeAttribute("aria-busy");
+            if (button.dataset.originalHtml) {
+                button.innerHTML = button.dataset.originalHtml;
+                if (typeof I18N !== "undefined" && typeof I18N.applyTranslations === "function") {
+                    I18N.applyTranslations();
+                }
+            }
+        }
+    }
+    window.setButtonLoading = setButtonLoading;
 
     // --- Clock Status bar ---
     function updateClock() {
@@ -791,15 +827,26 @@ document.addEventListener("DOMContentLoaded", () => {
     // Login Form Submit (proceeds directly without repeating splash intro)
     document.getElementById("loginForm").addEventListener("submit", (e) => {
         e.preventDefault();
+        const submitBtn = document.getElementById("btnLoginSubmit") || document.querySelector("#loginForm button[type='submit']");
         const email = document.getElementById("login-email").value.trim().toLowerCase();
         const password = document.getElementById("login-password").value;
+
+        const loadingText = (typeof I18N !== "undefined" && typeof I18N.t === "function" && I18N.t("btn_signing_in") !== "btn_signing_in")
+            ? I18N.t("btn_signing_in")
+            : "Signing in...";
+        setButtonLoading(submitBtn, true, loadingText);
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
 
         fetch(DataStore.getApiUrl("/api/login"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, password })
+            body: JSON.stringify({ email, password }),
+            signal: controller.signal
         })
         .then(res => {
+            clearTimeout(timeoutId);
             const contentType = res.headers.get("content-type");
             if (!contentType || !contentType.includes("application/json")) {
                 throw new Error("Unable to connect to the backend service. Please check server connection.");
@@ -821,13 +868,25 @@ document.addEventListener("DOMContentLoaded", () => {
             document.getElementById("loginForm").reset();
         })
         .catch(err => {
-            showToast(err.message || "Invalid email credentials or password.", "error");
+            clearTimeout(timeoutId);
+            let message = err.message || "Invalid email credentials or password.";
+            if (err.name === "AbortError" || err.name === "TimeoutError") {
+                message = "Server request timed out. Please check your connection and try again.";
+            } else if (err.name === "TypeError" && (err.message === "Failed to fetch" || err.message.includes("NetworkError"))) {
+                message = "Network error: Unable to connect to backend server. Please verify your connection.";
+            }
+            showToast(message, "error");
+        })
+        .finally(() => {
+            clearTimeout(timeoutId);
+            setButtonLoading(submitBtn, false);
         });
     });
 
     // Registration Form Submit
     document.getElementById("registerForm").addEventListener("submit", (e) => {
         e.preventDefault();
+        const submitBtn = document.getElementById("btnRegisterSubmit") || document.querySelector("#registerForm button[type='submit']");
         const name = document.getElementById("reg-name").value.trim();
         const email = document.getElementById("reg-email").value.trim().toLowerCase();
         const password = document.getElementById("reg-password").value;
@@ -838,12 +897,19 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
+        setButtonLoading(submitBtn, true, "Creating Account...");
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
+
         fetch(DataStore.getApiUrl("/api/register"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name, email, password })
+            body: JSON.stringify({ name, email, password }),
+            signal: controller.signal
         })
         .then(res => {
+            clearTimeout(timeoutId);
             const contentType = res.headers.get("content-type");
             if (!contentType || !contentType.includes("application/json")) {
                 throw new Error("Unable to connect to the cloud service. Please verify that your backend server has been successfully redeployed on Render.");
@@ -859,7 +925,18 @@ document.addEventListener("DOMContentLoaded", () => {
             document.getElementById("btnGoLogin").click();
         })
         .catch(err => {
-            showToast(err.message || "Registration failed.", "error");
+            clearTimeout(timeoutId);
+            let message = err.message || "Registration failed.";
+            if (err.name === "AbortError" || err.name === "TimeoutError") {
+                message = "Server request timed out. Please check your connection and try again.";
+            } else if (err.name === "TypeError" && (err.message === "Failed to fetch" || err.message.includes("NetworkError"))) {
+                message = "Network error: Unable to connect to server. Please try again.";
+            }
+            showToast(message, "error");
+        })
+        .finally(() => {
+            clearTimeout(timeoutId);
+            setButtonLoading(submitBtn, false);
         });
     });
 
@@ -1254,7 +1331,7 @@ document.addEventListener("DOMContentLoaded", () => {
             materials: materials,
             timestamp: new Date().toISOString(),
             status: "Pending",
-            image: ""
+            image: selectedImageBase64 || ""
         };
 
         resultStainType.textContent = I18N.tStain(stain);
@@ -1438,7 +1515,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnCompleteTreatment = document.getElementById("btnCompleteTreatment");
 
     function openCleaningGuide(historyItem) {
-        activeGuideScanId = historyItem.id;
+        activeGuideScanId = historyItem.id || historyItem._id;
+        activeGuideItem = historyItem;
         
         let recipe = getCleaningRecommendation(historyItem.stain, historyItem.fabric || historyItem.fabric_color, I18N.currentLang);
         if (!recipe && historyItem.steps && historyItem.steps.length) {
@@ -1553,6 +1631,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function closeGuideModal() {
         guideModal.style.display = "none";
         activeGuideScanId = null;
+        activeGuideItem = null;
         renderDashboard();
         renderHistory();
     }
@@ -1562,43 +1641,97 @@ document.addEventListener("DOMContentLoaded", () => {
 
     btnCompleteTreatment.addEventListener("click", async () => {
         console.log("Complete Treatment button clicked.");
-        if (!activeGuideScanId) {
-            console.error("Click handler triggered but no activeGuideScanId set.");
+        if (!activeGuideScanId && !activeGuideItem && !scanResultData) {
+            console.error("Click handler triggered but no active guide scan data set.");
             showToast("Failed to complete treatment: active guide scan ID not found.", "error");
             return;
         }
 
         try {
-            // 1. Update local storage cache first for instant feedback
+            const currentItem = activeGuideItem ||
+                (DataStore.getHistory().find(h => (h.id === activeGuideScanId || h._id === activeGuideScanId))) ||
+                scanResultData || {};
+
+            const scanId = activeGuideScanId || currentItem.id || currentItem._id || ("h_" + Date.now());
+            const userEmail = (currentUser && currentUser.email) || currentItem.email || "mobile_user@stainscan.com";
+            const stainName = currentItem.stain || "Used Cooking Oil";
+            const fabricType = currentItem.fabric || currentItem.fabric_color || "Cotton Fabric (100%)";
+            const confidenceScore = parseInt(currentItem.confidence) || 90;
+            const completionTimestamp = new Date().toISOString();
+            const scanImage = currentItem.image || selectedImageBase64 || "";
+
+            // 1. Update local storage cache first for instant UI feedback
             const history = DataStore.getHistory();
-            const itemIdx = history.findIndex(h => (h.id === activeGuideScanId || h._id === activeGuideScanId));
+            const itemIdx = history.findIndex(h => (h.id === scanId || h._id === scanId));
 
             if (itemIdx !== -1) {
                 history[itemIdx].status = "Treated";
+                history[itemIdx].stain = stainName;
+                history[itemIdx].fabric = fabricType;
+                history[itemIdx].confidence = confidenceScore;
+                history[itemIdx].timestamp = completionTimestamp;
                 DataStore.saveHistory(history);
-                console.log(`Local storage updated: marked scan ID ${activeGuideScanId} as Treated.`);
+                console.log(`Local storage updated: marked scan ID ${scanId} as Treated.`);
             } else {
-                console.warn(`Scan ID ${activeGuideScanId} not found in local history cache.`);
+                const newLocalItem = {
+                    id: scanId,
+                    email: userEmail,
+                    stain: stainName,
+                    fabric: fabricType,
+                    confidence: confidenceScore,
+                    status: "Treated",
+                    timestamp: completionTimestamp,
+                    image: scanImage
+                };
+                history.unshift(newLocalItem);
+                DataStore.saveHistory(history.slice(0, 10));
+                console.log(`Local storage updated: added new Treated scan ID ${scanId}.`);
             }
 
-            // 2. Sync treatment completion directly to cloud API
-            try {
-                await fetch(DataStore.getApiUrl("/api/treatment-complete"), {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        scan_id: activeGuideScanId,
-                        email: currentUser ? currentUser.email : "guest@stainscan.com",
-                        timestamp: new Date().toISOString()
-                    })
-                });
-                console.log("Successfully posted /api/treatment-complete to server");
-            } catch (treatmentErr) {
-                console.warn("Could not post to /api/treatment-complete:", treatmentErr);
+            // 2. Prepare comprehensive payload matching requirements:
+            // stain name, confidence percentage, fabric type, treatment status ("Treated"), user email/ID, and timestamp
+            const completionPayload = {
+                id: scanId,
+                scan_id: scanId,
+                stain: stainName,
+                confidence: confidenceScore,
+                fabric: fabricType,
+                status: "Treated",
+                treatment_status: "Treated",
+                email: userEmail,
+                timestamp: completionTimestamp,
+                image: scanImage
+            };
+
+            // 3. Send asynchronous POST request to live Render backend endpoints
+            // Supports /api/scans/save and /api/treatment-complete
+            const endpoints = ["/api/scans/save", "/api/treatment-complete", "/api/scans"];
+            let syncedToCloud = false;
+
+            for (const ep of endpoints) {
+                try {
+                    const res = await fetch(DataStore.getApiUrl(ep), {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(completionPayload)
+                    });
+                    if (res.ok) {
+                        console.log(`Successfully synced treatment completion to ${ep}`);
+                        syncedToCloud = true;
+                        break;
+                    }
+                } catch (netErr) {
+                    console.warn(`Could not sync completion to ${ep}:`, netErr);
+                }
+            }
+
+            // Also try updateScanStatusCloud as safety fallback
+            if (!syncedToCloud) {
+                DataStore.updateScanStatusCloud(scanId, "Treated").catch(() => {});
             }
 
             // Log activity to user actions list
-            DataStore.addLog("info", `Treatment marked complete for scan ID: ${activeGuideScanId}`);
+            DataStore.addLog("info", `Treatment completed: ${stainName} on ${fabricType} (Scan ID: ${scanId})`);
 
             // a. Show the 'Treatment Completed' notification alert/toast
             showToast(I18N.currentLang === "hil" ? "Tapos na ang Pagpaninlo!" : "Treatment Completed!", "success");
@@ -1606,6 +1739,7 @@ document.addEventListener("DOMContentLoaded", () => {
             // Close the guide modal
             guideModal.style.display = "none";
             activeGuideScanId = null;
+            activeGuideItem = null;
 
             // b. Reset the scan form state (clear uploaded image preview and reset inputs)
             resetScanFormState();

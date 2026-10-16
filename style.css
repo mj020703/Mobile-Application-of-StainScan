@@ -508,8 +508,40 @@ body {
     justify-content: center;
     align-items: center;
     gap: 8px;
-    transition: var(--transition-bounce);
+    transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.25s ease, filter 0.25s ease;
     width: auto;
+}
+
+/* Button Disabled & Loading States */
+.btn:disabled,
+.btn.btn-loading {
+    opacity: 0.7 !important;
+    cursor: not-allowed !important;
+    transform: none !important;
+}
+
+.btn:disabled:hover,
+.btn.btn-loading:hover {
+    transform: none !important;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2) !important;
+    cursor: not-allowed !important;
+}
+
+.btn.btn-loading i.fa-spin,
+.btn.btn-loading .btn-spinner {
+    font-size: 15px;
+    line-height: 1;
+}
+
+.btn-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.35);
+    border-top-color: #ffffff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
 }
 
 .btn-block {

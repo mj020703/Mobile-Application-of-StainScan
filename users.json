@@ -1,0 +1,30 @@
+[
+  {
+    "name": "John Michael Dohinog",
+    "email": "admin@stainscan.com",
+    "password": "admin123",
+    "role": "admin",
+    "avatar": "System Root"
+  },
+  {
+    "name": "John Michael Dohinog",
+    "email": "johnmichaeldohinog6@gmail.com",
+    "password": "user123",
+    "role": "user",
+    "avatar": "John Michael Dohinog"
+  },
+  {
+    "name": "Dohinog",
+    "email": "johnmichaeldohinog1@gmail.com",
+    "password": "user123",
+    "role": "user",
+    "avatar": "Dohinog"
+  },
+  {
+    "name": "Test User",
+    "email": "testuser@stainscan.com",
+    "password": "password123",
+    "role": "user",
+    "avatar": "Test User"
+  }
+]

@@ -14,7 +14,7 @@
     <!-- Font Awesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=3.3">
 </head>
 
 <body class="admin-portal-body">
@@ -41,8 +41,8 @@
                         <input type="password" id="admin-password" required placeholder="••••••••">
                     </div>
                 </div>
-                <button type="submit" class="btn btn-primary btn-block btn-orange">
-                    <span>Unlock Admin Console</span>
+                <button type="submit" class="btn btn-primary btn-block btn-orange" id="btnAdminLoginSubmit">
+                    <span>Sign In</span>
                     <i class="fas fa-arrow-right"></i>
                 </button>
             </form>
@@ -171,7 +171,8 @@
                     </div>
                     <!-- Live Mobile Scans Feed Card -->
                     <div class="dashboard-card pad-none" style="margin-top: 24px;">
-                        <div class="card-title-row pad-20" style="display:flex; justify-content:space-between; align-items:center;">
+                        <div class="card-title-row pad-20"
+                            style="display:flex; justify-content:space-between; align-items:center;">
                             <div>
                                 <h3>Live Mobile Scans Feed</h3>
                                 <p>Real-time stream of incoming stain classifications from connected mobile devices.</p>
@@ -289,7 +290,7 @@
     <div class="toast-container" id="toastContainer"></div>
 
     <!-- Admin JavaScript -->
-    <script src="admin.js?v=2.1"></script>
+    <script src="admin.js?v=2.6"></script>
 </body>
 
 </html>

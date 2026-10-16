@@ -8,6 +8,13 @@ from PIL import Image
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
+from pymongo.errors import (
+    PyMongoError,
+    AutoReconnect,
+    ServerSelectionTimeoutError,
+    NetworkTimeout,
+    ConnectionFailure
+)
 import certifi
 import numpy as np
 
@@ -41,7 +48,36 @@ except ModuleNotFoundError:
 
 # Initialize Flask App
 app = Flask(__name__, static_folder='.', static_url_path='')
-CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Configure CORS to allow cross-origin requests from any origin (*) across all API routes (/*)
+CORS(
+    app,
+    resources={
+        r"/*": {
+            "origins": "*",
+            "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+            "expose_headers": ["Content-Type", "Authorization"],
+            "max_age": 86400
+        }
+    }
+)
+
+@app.before_request
+def handle_preflight_options():
+    if request.method == "OPTIONS":
+        response = app.make_default_options_response()
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
+        return response
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
+    return response
 
 @app.route("/")
 def index():
@@ -188,51 +224,38 @@ DEFAULT_KB = {
     "Mud": RECOMMENDATION_DATABASE["mud"]["white"]
 }
 
-# Initialize MongoDB
-MONGO_URI = os.environ.get("MONGO_URI", "")
+# Initialize MongoDB Connection & Resilient Database Handling
+MONGO_URI = os.environ.get("MONGO_URI") or os.environ.get("MONGODB_URI") or os.environ.get("DATABASE_URL") or ""
+MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "stainscan_db")
+
+client = None
 db = None
 is_demo_mode = True
-
-if MONGO_URI:
-    if "tlsAllowInvalidCertificates" not in MONGO_URI:
-        separator = "&" if "?" in MONGO_URI else "?"
-        MONGO_URI = f"{MONGO_URI}{separator}tlsAllowInvalidCertificates=true"
-        
-    try:
-        client = MongoClient(
-            MONGO_URI, 
-            serverSelectionTimeoutMS=5000, 
-            tls=True, 
-            tlsAllowInvalidCertificates=True
-        )
-        db = client["stainscan_db"]
-        client.server_info() # Trigger quick connection check
-        is_demo_mode = False
-        print("Connected to MongoDB Atlas successfully.")
-        
-        # Populate Default Knowledge Base if collection is empty
-        if db["kb"].count_documents({}) == 0:
-            db["kb"].insert_one({"_id": "current_kb", "data": DEFAULT_KB})
-            print("Populated default knowledge base in MongoDB.")
-            
-        # Create default Admin if empty
-        if db["users"].count_documents({}) == 0:
-            default_users = [
-                { "name": "Admin Manager", "email": "admin@stainscan.com", "password": "admin123", "role": "admin", "avatar": "admin" },
-                { "name": "John Doe", "email": "user@stainscan.com", "password": "user123", "role": "user", "avatar": "John" }
-            ]
-            db["users"].insert_many(default_users)
-            print("Populated default users in MongoDB.")
-    except Exception as e:
-        print(f"Error connecting to MongoDB: {e}. Running in memory fallback mode.")
-        db = None
-        is_demo_mode = True
-else:
-    print("MONGO_URI not configured. Running in memory fallback mode.")
-    is_demo_mode = True
+_last_connect_attempt = 0
 
 SCANS_FILE = "scans.json"
 METRICS_FILE = "metrics.json"
+USERS_FILE = "users.json"
+
+def _load_initial_users():
+    if os.path.exists(USERS_FILE):
+        try:
+            with open(USERS_FILE, "r", encoding="utf-8") as f:
+                content = json.load(f)
+                if isinstance(content, list) and len(content) > 0:
+                    return content
+        except Exception as e:
+            print(f"Error loading initial users from file: {e}")
+    return [
+        { "name": "John Michael Dohinog", "email": "admin@stainscan.com", "password": "admin123", "role": "admin", "avatar": "System Root" }
+    ]
+
+def _save_users_file():
+    try:
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(mock_db["users"], f, indent=2)
+    except Exception as e:
+        print(f"Error saving users file: {e}")
 
 def _load_initial_scans():
     if os.path.exists(SCANS_FILE):
@@ -243,62 +266,214 @@ def _load_initial_scans():
             print(f"Error loading initial scans from file: {e}")
     return []
 
-# Fallback memory stores
-if is_demo_mode:
-    mock_db = {
-        "users": [
-            { "name": "Admin Manager", "email": "admin@stainscan.com", "password": "admin123", "role": "admin", "avatar": "admin" },
-            { "name": "John Doe", "email": "user@stainscan.com", "password": "user123", "role": "user", "avatar": "John" }
-        ],
-        "scans": _load_initial_scans(),
-        "logs": [
-            { "time": datetime.utcnow().isoformat(), "type": "info", "text": "Database initialized successfully (Demo Mode)." }
-        ],
-        "kb": DEFAULT_KB,
-        "metrics": {}
+# Persistent in-memory and local file store (strictly initialized without mock offsets)
+mock_db = {
+    "users": _load_initial_users(),
+    "scans": _load_initial_scans(),
+    "logs": [
+        { "time": datetime.utcnow().isoformat(), "type": "info", "text": "Database initialized successfully." }
+    ],
+    "kb": DEFAULT_KB,
+    "metrics": {
+        "total_scans": 0,
+        "successful_treatments": 0,
+        "stain_counts": {"Used Cooking Oil": 0, "Black Ballpen Ink": 0, "Mud": 0}
     }
+}
+
+def _save_scans_file():
+    try:
+        with open(SCANS_FILE, "w", encoding="utf-8") as f:
+            json.dump(mock_db["scans"], f, indent=2)
+    except Exception as e:
+        print(f"Error saving scans file: {e}")
+
+def create_mongo_client(uri):
+    """
+    Creates a robust PyMongo MongoClient instance optimized for Atlas cloud clusters
+    and graceful mobile network reconnection (socket timeouts, idle connection closing, TLS).
+    """
+    formatted_uri = uri
+    if "tlsAllowInvalidCertificates" not in formatted_uri:
+        separator = "&" if "?" in formatted_uri else "?"
+        formatted_uri = f"{formatted_uri}{separator}tlsAllowInvalidCertificates=true"
+
+    try:
+        ca_cert = certifi.where()
+    except Exception:
+        ca_cert = None
+
+    client_options = {
+        "serverSelectionTimeoutMS": 5000,
+        "connectTimeoutMS": 10000,
+        "socketTimeoutMS": 20000,
+        "maxIdleTimeMS": 45000,          # Close idle sockets before Atlas drops them
+        "retryWrites": True,             # Retry writes on transient network glitches
+        "retryReads": True,              # Retry reads on transient network drops
+        "tls": True,
+        "tlsAllowInvalidCertificates": True
+    }
+    if ca_cert:
+        client_options["tlsCAFile"] = ca_cert
+
+    return MongoClient(formatted_uri, **client_options)
+
+def init_mongodb():
+    """
+    Establishes connection to MongoDB Atlas, verifies ping, and initializes
+    default knowledge base and admin collections.
+    """
+    global client, db, is_demo_mode, _last_connect_attempt
+    import time
+    _last_connect_attempt = time.time()
+
+    if not MONGO_URI:
+        print("MONGO_URI not configured. Running in local resilient fallback mode.")
+        is_demo_mode = True
+        db = None
+        return None
+
+    try:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+        new_client = create_mongo_client(MONGO_URI)
+        # Verify cluster accessibility via ping
+        new_client.admin.command('ping')
+        client = new_client
+        db = client[MONGO_DB_NAME]
+        is_demo_mode = False
+        print(f"Connected to MongoDB Atlas successfully (DB: {MONGO_DB_NAME}).")
+
+        # Populate Default Knowledge Base if collection is empty
+        try:
+            if db["kb"].count_documents({}) == 0:
+                db["kb"].insert_one({"_id": "current_kb", "data": DEFAULT_KB})
+                print("Populated default knowledge base in MongoDB.")
+        except Exception as e:
+            print(f"Notice: Initial KB seeding skipped: {e}")
+
+        # Seed initial admin user if collection is completely empty
+        try:
+            if db["users"].count_documents({}) == 0:
+                default_users = [
+                    { "name": "John Michael Dohinog", "email": "admin@stainscan.com", "password": "admin123", "role": "admin", "avatar": "System Root" }
+                ]
+                db["users"].insert_many(default_users)
+                print("Populated root admin user in MongoDB.")
+        except Exception as e:
+            print(f"Notice: Initial users seeding skipped: {e}")
+
+        return db
+    except Exception as e:
+        print(f"Notice: MongoDB Atlas connection error ({e}). Running in resilient fallback mode.")
+        db = None
+        is_demo_mode = True
+        return None
+
+def get_db():
+    """
+    Returns the active database instance. If a temporary network disconnect
+    occurred, attempts a graceful reconnect if cooldown has elapsed.
+    """
+    global client, db, is_demo_mode, _last_connect_attempt
+    import time
+
+    if not MONGO_URI:
+        return None
+
+    if db is not None:
+        return db
+
+    # Throttle reconnect attempts to once every 10 seconds to avoid blocking requests
+    if time.time() - _last_connect_attempt > 10:
+        return init_mongodb()
+
+    return None
+
+def execute_db_operation(op, fallback_fn=None):
+    """
+    Executes a database operation with automatic single retry on transient
+    network drops (AutoReconnect, ConnectionFailure, ServerSelectionTimeoutError).
+    If connection is unavailable or fails, invokes fallback_fn gracefully.
+    """
+    active_db = get_db()
+    if active_db is not None:
+        try:
+            return op(active_db)
+        except (AutoReconnect, ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout) as net_err:
+            print(f"Transient MongoDB network drop detected ({net_err}). Attempting reconnect & retry...")
+            reconnected_db = init_mongodb()
+            if reconnected_db is not None:
+                try:
+                    return op(reconnected_db)
+                except Exception as retry_err:
+                    print(f"MongoDB retry failed after network drop: {retry_err}. Falling back gracefully.")
+            else:
+                print("MongoDB reconnection failed. Falling back gracefully.")
+        except Exception as general_err:
+            print(f"MongoDB operation error: {general_err}. Falling back gracefully.")
+
+    if fallback_fn is not None:
+        return fallback_fn()
+    return None
+
+# Initial connection attempt on boot
+init_mongodb()
 
 def get_metrics():
-    if not is_demo_mode and db is not None:
-        try:
-            doc = db["metrics"].find_one({"_id": "app_metrics"})
-            if doc:
-                return {
-                    "total_scans": int(doc.get("total_scans", 0)),
-                    "successful_treatments": int(doc.get("successful_treatments", 0)),
-                    "stain_counts": doc.get("stain_counts", {})
-                }
-        except Exception as e:
-            print(f"Error fetching metrics from MongoDB: {e}")
-
-    if os.path.exists(METRICS_FILE):
-        try:
-            with open(METRICS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-
     all_scans = get_scans()
+    mobile_users = get_mobile_user_count()
+
+    # 1. If scans collection is empty or dropped, return clean 0 values
+    if not all_scans:
+        clean_zero_metrics = {
+            "total_scans": 0,
+            "total_cnn_scans_run": 0,
+            "totalScansCount": 0,
+            "successful_treatments": 0,
+            "totalTreatedCount": 0,
+            "total_users": mobile_users,
+            "registered_mobile_users": mobile_users,
+            "totalUsersCount": mobile_users,
+            "stain_counts": {"Used Cooking Oil": 0, "Black Ballpen Ink": 0, "Mud": 0}
+        }
+        save_metrics(clean_zero_metrics)
+        return clean_zero_metrics
+
+    # 2. Scans exist: compute real metrics directly from the scans and history collections
     stain_counts = {"Used Cooking Oil": 0, "Black Ballpen Ink": 0, "Mud": 0}
+    treated_count = 0
     for s in all_scans:
         st = s.get("stain")
         if st in stain_counts:
             stain_counts[st] += 1
+        if s.get("status") == "Treated":
+            treated_count += 1
 
     metrics = {
         "total_scans": len(all_scans),
-        "successful_treatments": len([s for s in all_scans if s.get("status") == "Treated"]),
-        "stain_counts": stain_counts
+        "total_cnn_scans_run": len(all_scans),
+        "totalScansCount": len(all_scans),
+        "successful_treatments": treated_count,
+        "totalTreatedCount": treated_count,
+        "total_users": mobile_users,
+        "registered_mobile_users": mobile_users,
+        "totalUsersCount": mobile_users,
+        "stain_counts": stain_counts,
+        "status": "ok"
     }
     save_metrics(metrics)
     return metrics
 
 def save_metrics(metrics):
-    if not is_demo_mode and db is not None:
-        try:
-            db["metrics"].replace_one({"_id": "app_metrics"}, {"_id": "app_metrics", **metrics}, upsert=True)
-        except Exception as e:
-            print(f"Error saving metrics to MongoDB: {e}")
+    def _op(d):
+        d["metrics"].replace_one({"_id": "app_metrics"}, {"_id": "app_metrics", **metrics}, upsert=True)
+        return True
+    execute_db_operation(_op, fallback_fn=lambda: None)
 
     try:
         with open(METRICS_FILE, "w", encoding="utf-8") as f:
@@ -306,10 +481,10 @@ def save_metrics(metrics):
     except Exception as e:
         print(f"Error saving metrics to file: {e}")
 
-    if is_demo_mode and "metrics" in mock_db:
+    if "metrics" in mock_db:
         mock_db["metrics"] = metrics
 
-def increment_scan_count(stain_name=None, fabric_name=None, confidence=None, email=None):
+def increment_scan_count(stain_name=None, fabric_name=None, confidence=None, email=None, image=None):
     metrics = get_metrics()
     metrics["total_scans"] = metrics.get("total_scans", 0) + 1
 
@@ -329,7 +504,7 @@ def increment_scan_count(stain_name=None, fabric_name=None, confidence=None, ema
         "confidence": int(confidence or 90),
         "timestamp": datetime.utcnow().isoformat(),
         "status": "Pending",
-        "image": ""
+        "image": image or ""
     }
     try:
         add_scan(new_scan)
@@ -342,26 +517,30 @@ def increment_scan_count(stain_name=None, fabric_name=None, confidence=None, ema
 def increment_treatment_count(scan_id=None):
     # Guard against double counting: check if scan is already marked Treated
     if scan_id:
-        try:
-            if not is_demo_mode and db is not None:
-                from bson.objectid import ObjectId
-                query = {"$or": [{"_id": ObjectId(scan_id)}, {"id": scan_id}]} if ObjectId.is_valid(scan_id) else {"id": scan_id}
-                existing_scan = db["scans"].find_one(query)
-                if existing_scan:
-                    if existing_scan.get("status") == "Treated":
-                        print(f"Scan {scan_id} is already marked Treated. Skipping duplicate increment.")
-                        return get_metrics()
-                    db["scans"].update_one(query, {"$set": {"status": "Treated"}})
-            else:
-                s = next((x for x in mock_db["scans"] if x.get("id") == scan_id or x.get("_id") == scan_id), None)
-                if s:
-                    if s.get("status") == "Treated":
-                        print(f"Scan {scan_id} is already marked Treated (demo). Skipping duplicate increment.")
-                        return get_metrics()
-                    s["status"] = "Treated"
-                    _save_scans_file()
-        except Exception as e:
-            print(f"Error checking/updating scan status in increment_treatment_count: {e}")
+        def _op(d):
+            from bson.objectid import ObjectId
+            query = {"$or": [{"_id": ObjectId(scan_id)}, {"id": scan_id}]} if ObjectId.is_valid(scan_id) else {"id": scan_id}
+            existing_scan = d["scans"].find_one(query)
+            if existing_scan:
+                if existing_scan.get("status") == "Treated":
+                    return "already_treated"
+                d["scans"].update_one(query, {"$set": {"status": "Treated"}})
+                return "updated"
+            return None
+        def _fb():
+            s = next((x for x in mock_db["scans"] if x.get("id") == scan_id or x.get("_id") == scan_id), None)
+            if s:
+                if s.get("status") == "Treated":
+                    return "already_treated"
+                s["status"] = "Treated"
+                _save_scans_file()
+                return "updated"
+            return None
+
+        status = execute_db_operation(_op, fallback_fn=_fb)
+        if status == "already_treated":
+            print(f"Scan {scan_id} is already marked Treated. Skipping duplicate increment.")
+            return get_metrics()
 
     metrics = get_metrics()
     metrics["successful_treatments"] = metrics.get("successful_treatments", 0) + 1
@@ -369,78 +548,122 @@ def increment_treatment_count(scan_id=None):
     add_log("info", f"Treatment #{metrics['successful_treatments']} completed successfully (Scan ID: {scan_id or 'N/A'})")
     return metrics
 
-def _save_scans_file():
-    try:
-        with open(SCANS_FILE, "w", encoding="utf-8") as f:
-            json.dump(mock_db["scans"], f, indent=2)
-    except Exception as e:
-        print(f"Error saving scans file: {e}")
-
 def get_users():
-    if not is_demo_mode and db is not None:
-        users = list(db["users"].find({}))
+    def _op(d):
+        users = list(d["users"].find({}))
         for u in users:
             u["_id"] = str(u["_id"])
         return users
-    return mock_db["users"]
+    return execute_db_operation(_op, fallback_fn=lambda: mock_db["users"])
+
+def get_user_count():
+    """
+    Counts total user documents in MongoDB 'users' collection.
+    """
+    def _op(d):
+        return d["users"].count_documents({})
+    return execute_db_operation(_op, fallback_fn=lambda: len(get_users()))
+
+def get_mobile_user_count():
+    """
+    Strictly counts actual mobile user accounts where role == 'user' (or role != 'admin')
+    in MongoDB without adding any hardcoded offsets or mock users.
+    """
+    def _op(d):
+        return d["users"].count_documents({"$or": [{"role": "user"}, {"role": {"$ne": "admin"}}]})
+    def _fb():
+        return len([u for u in get_users() if u.get("role") != "admin"])
+    return execute_db_operation(_op, fallback_fn=_fb)
 
 def add_user(user):
-    if not is_demo_mode and db is not None:
-        result = db["users"].insert_one(user)
+    def _op(d):
+        result = d["users"].insert_one(user)
         user["_id"] = str(result.inserted_id)
         return user
-    mock_db["users"].append(user)
-    return user
+    def _fb():
+        mock_db["users"].append(user)
+        _save_users_file()
+        return user
+    res = execute_db_operation(_op, fallback_fn=_fb)
+    if user not in mock_db["users"]:
+        mock_db["users"].append(user)
+        _save_users_file()
+    return res
 
 def find_user_by_email(email):
-    if not is_demo_mode and db is not None:
-        user = db["users"].find_one({"email": email})
+    def _op(d):
+        user = d["users"].find_one({"email": email})
         if user:
             user["_id"] = str(user["_id"])
         return user
-    return next((u for u in mock_db["users"] if u["email"] == email), None)
+    def _fb():
+        return next((u for u in mock_db["users"] if u["email"] == email), None)
+    return execute_db_operation(_op, fallback_fn=_fb)
 
 def get_kb():
-    if not is_demo_mode and db is not None:
-        doc = db["kb"].find_one({"_id": "current_kb"})
+    def _op(d):
+        doc = d["kb"].find_one({"_id": "current_kb"})
         return doc["data"] if doc else DEFAULT_KB
-    return mock_db["kb"]
+    return execute_db_operation(_op, fallback_fn=lambda: mock_db.get("kb", DEFAULT_KB))
 
 def save_kb(kb_data):
-    if not is_demo_mode and db is not None:
-        db["kb"].replace_one({"_id": "current_kb"}, {"_id": "current_kb", "data": kb_data}, upsert=True)
-    else:
-        mock_db["kb"] = kb_data
+    def _op(d):
+        d["kb"].replace_one({"_id": "current_kb"}, {"_id": "current_kb", "data": kb_data}, upsert=True)
+        return True
+    execute_db_operation(_op, fallback_fn=lambda: None)
+    mock_db["kb"] = kb_data
 
 def get_scans(email=None):
-    if not is_demo_mode and db is not None:
+    def _op(d):
         query = {"email": email} if email else {}
-        scans = list(db["scans"].find(query).sort("timestamp", -1))
+        scans = list(d["scans"].find(query).sort("timestamp", -1))
+        # Ensure completed scans from 'history' collection are also merged if present
+        try:
+            colls = d.list_collection_names()
+            if "history" in colls:
+                history_scans = list(d["history"].find(query).sort("timestamp", -1))
+                existing_ids = {str(s.get("id") or s.get("_id")) for s in scans}
+                for hs in history_scans:
+                    hs_id = str(hs.get("id") or hs.get("_id"))
+                    if hs_id not in existing_ids:
+                        scans.append(hs)
+                        existing_ids.add(hs_id)
+        except Exception as e:
+            print(f"Notice: checking history collection: {e}")
         for s in scans:
             s["_id"] = str(s["_id"])
         return scans
-    if email:
-        return [s for s in mock_db["scans"] if s["email"] == email]
-    return sorted(mock_db["scans"], key=lambda s: s.get("timestamp", ""), reverse=True)
+    def _fb():
+        if email:
+            return [s for s in mock_db["scans"] if s["email"] == email]
+        return sorted(mock_db["scans"], key=lambda s: s.get("timestamp", ""), reverse=True)
+    return execute_db_operation(_op, fallback_fn=_fb)
 
 def add_scan(scan):
-    if not is_demo_mode and db is not None:
-        result = db["scans"].insert_one(scan)
+    def _op(d):
+        result = d["scans"].insert_one(scan)
         scan["_id"] = str(result.inserted_id)
         return scan
-    if not scan.get("id"):
-        scan["id"] = "h_" + str(len(mock_db["scans"]) + 1)
-    mock_db["scans"].insert(0, scan)
-    _save_scans_file()
-    return scan
+    def _fb():
+        if not scan.get("id"):
+            scan["id"] = "h_" + str(len(mock_db["scans"]) + 1)
+        mock_db["scans"].insert(0, scan)
+        _save_scans_file()
+        return scan
+    res = execute_db_operation(_op, fallback_fn=_fb)
+    # Ensure local in-memory fallback list stays synced
+    if scan not in mock_db["scans"]:
+        mock_db["scans"].insert(0, scan)
+        _save_scans_file()
+    return res
 
 def get_logs():
-    if not is_demo_mode and db is not None:
-        logs = list(db["logs"].find({}).sort("time", -1).limit(100))
+    def _op(d):
+        logs = list(d["logs"].find({}).sort("time", -1).limit(100))
         for l in logs:
             l["_id"] = str(l["_id"])
         return logs
-    return mock_db["logs"][:100]
+    return execute_db_operation(_op, fallback_fn=lambda: mock_db["logs"][:100])
 
 def add_log(log_type, text):
     log_entry = {
@@ -448,10 +671,11 @@ def add_log(log_type, text):
         "type": log_type,
         "text": text
     }
-    if not is_demo_mode and db is not None:
-        db["logs"].insert_one(log_entry)
-    else:
-        mock_db["logs"].insert(0, log_entry)
+    def _op(d):
+        d["logs"].insert_one(log_entry)
+        return True
+    execute_db_operation(_op, fallback_fn=lambda: None)
+    mock_db["logs"].insert(0, log_entry)
 
 # --- DATABASE API ROUTES ---
 
@@ -579,18 +803,20 @@ def api_scans():
         # Check if scan with this id already exists to prevent duplicate insertion
         scan_id = data.get("id", "")
         if scan_id:
-            existing = None
-            if not is_demo_mode and db is not None:
+            def _mongo_check(d):
                 from bson.objectid import ObjectId
                 query = {"$or": [{"id": scan_id}, {"_id": ObjectId(scan_id)}]} if ObjectId.is_valid(scan_id) else {"id": scan_id}
-                existing = db["scans"].find_one(query)
-                if existing:
-                    existing["_id"] = str(existing["_id"])
-                    return jsonify(existing), 200
-            else:
-                existing = next((s for s in mock_db["scans"] if s.get("id") == scan_id), None)
-                if existing:
-                    return jsonify(existing), 200
+                ex = d["scans"].find_one(query)
+                if ex:
+                    ex["_id"] = str(ex["_id"])
+                    return ex
+                return None
+            def _fb_check():
+                return next((s for s in mock_db["scans"] if s.get("id") == scan_id), None)
+
+            existing = execute_db_operation(_mongo_check, fallback_fn=_fb_check)
+            if existing:
+                return jsonify(existing), 200
 
         saved_scan = add_scan(new_scan)
         add_log("info", f"New stain scan logged for: {new_scan['email']} ({new_scan['stain']})")
@@ -610,59 +836,160 @@ def api_update_scan(scan_id):
         
     new_status = data["status"]
     
-    if not is_demo_mode and db is not None:
+    def _op(d):
         from bson.objectid import ObjectId
-        try:
-            query = {}
-            if ObjectId.is_valid(scan_id):
-                query = {"$or": [{"_id": ObjectId(scan_id)}, {"id": scan_id}]}
-            else:
-                query = {"$or": [{"id": scan_id}, {"_id": scan_id}]}
-                
-            result = db["scans"].update_one(query, {"$set": {"status": new_status}})
-            if result.matched_count > 0:
-                if new_status == "Treated":
-                    increment_treatment_count(scan_id=scan_id)
-                add_log("info", f"Scan {scan_id} status updated to {new_status}")
-                return jsonify({"success": True, "message": f"Scan updated to {new_status}"})
-        except Exception as e:
-            return jsonify({"error": f"Failed to update scan: {str(e)}"}), 500
-    else:
-        # Mock/Demo database fallback update
+        query = {"$or": [{"_id": ObjectId(scan_id)}, {"id": scan_id}]} if ObjectId.is_valid(scan_id) else {"$or": [{"id": scan_id}, {"_id": scan_id}]}
+        res = d["scans"].update_one(query, {"$set": {"status": new_status}})
+        return res.matched_count > 0
+
+    def _fb():
         scan = next((s for s in mock_db["scans"] if s.get("id") == scan_id or s.get("_id") == scan_id), None)
         if scan:
             scan["status"] = new_status
             _save_scans_file()
-            if new_status == "Treated":
-                increment_treatment_count(scan_id=scan_id)
-            add_log("info", f"Scan {scan_id} status updated to {new_status} (Demo Mode)")
-            return jsonify({"success": True, "message": f"Scan updated to {new_status}"})
+            return True
+        return False
+
+    updated = execute_db_operation(_op, fallback_fn=_fb)
+    if updated:
+        if new_status == "Treated":
+            increment_treatment_count(scan_id=scan_id)
+        add_log("info", f"Scan {scan_id} status updated to {new_status}")
+        return jsonify({"success": True, "message": f"Scan updated to {new_status}"})
             
     return jsonify({"error": "Scan not found"}), 404
 
+@app.route("/api/scans/save", methods=["POST", "OPTIONS"])
 @app.route("/api/treatment-complete", methods=["POST", "OPTIONS"])
-def api_treatment_complete():
+@app.route("/api/treatment/complete", methods=["POST", "OPTIONS"])
+def api_save_treatment_scan():
     if request.method == "OPTIONS":
         return jsonify({"status": "ok"})
     data = request.get_json(silent=True) or {}
-    scan_id = data.get("scan_id") or data.get("id")
-    metrics = increment_treatment_count(scan_id=scan_id)
+    scan_id = data.get("scan_id") or data.get("id") or ("h_" + datetime.utcnow().strftime("%Y%m%d%H%M%S"))
+    email = (data.get("email") or "mobile_user@stainscan.com").strip().lower()
+    stain = data.get("stain") or "Used Cooking Oil"
+    fabric = data.get("fabric") or data.get("fabric_color") or "Cotton Fabric (100%)"
+    confidence = int(data.get("confidence") or 90)
+    status = data.get("status") or data.get("treatment_status") or "Treated"
+    timestamp = data.get("timestamp") or datetime.utcnow().isoformat()
+    image = data.get("image") or ""
+
+    scan_doc = {
+        "id": scan_id,
+        "email": email,
+        "stain": stain,
+        "fabric": fabric,
+        "confidence": confidence,
+        "status": status,
+        "timestamp": timestamp,
+        "image": image
+    }
+
+    def _op(d):
+        from bson.objectid import ObjectId
+        query = {"$or": [{"_id": ObjectId(scan_id)}, {"id": scan_id}]} if ObjectId.is_valid(scan_id) else {"id": scan_id}
+        existing = d["scans"].find_one(query)
+        if existing:
+            d["scans"].update_one(query, {"$set": {
+                "status": status,
+                "stain": stain,
+                "fabric": fabric,
+                "confidence": confidence,
+                "timestamp": timestamp,
+                "image": image or existing.get("image", "")
+            }})
+            scan_doc["_id"] = str(existing["_id"])
+        else:
+            res = d["scans"].insert_one(scan_doc)
+            scan_doc["_id"] = str(res.inserted_id)
+
+        # Also sync to 'history' collection if present
+        try:
+            if "history" in d.list_collection_names():
+                d["history"].update_one(query, {"$set": scan_doc}, upsert=True)
+        except Exception as e:
+            print(f"Notice: history collection sync: {e}")
+
+        return scan_doc
+
+    def _fb():
+        existing = next((s for s in mock_db["scans"] if s.get("id") == scan_id or s.get("_id") == scan_id), None)
+        if existing:
+            existing["status"] = status
+            existing["stain"] = stain
+            existing["fabric"] = fabric
+            existing["confidence"] = confidence
+            existing["timestamp"] = timestamp
+            if image:
+                existing["image"] = image
+        else:
+            mock_db["scans"].insert(0, scan_doc)
+        _save_scans_file()
+        return scan_doc
+
+    saved = execute_db_operation(_op, fallback_fn=_fb)
+
+    # Keep mock_db list in sync
+    existing_mock = next((s for s in mock_db["scans"] if s.get("id") == scan_id or s.get("_id") == scan_id), None)
+    if existing_mock:
+        existing_mock["status"] = status
+        existing_mock["stain"] = stain
+        existing_mock["fabric"] = fabric
+        existing_mock["confidence"] = confidence
+        existing_mock["timestamp"] = timestamp
+        if image:
+            existing_mock["image"] = image
+    else:
+        mock_db["scans"].insert(0, scan_doc)
+    _save_scans_file()
+
+    add_log("info", f"Scan {scan_id} saved and treatment completed: {email} ({stain})")
+    current_metrics = get_metrics()
+
     return jsonify({
         "success": True,
-        "message": "Treatment marked complete and metrics updated",
-        "successful_treatments": metrics.get("successful_treatments", 0),
-        "metrics": metrics
+        "message": f"Scan {scan_id} saved and treatment marked complete",
+        "scan": saved or scan_doc,
+        "successful_treatments": current_metrics.get("successful_treatments", 0),
+        "metrics": current_metrics
     }), 200
 
+@app.route("/api/stats", methods=["GET", "OPTIONS"])
+@app.route("/api/admin/overview", methods=["GET", "OPTIONS"])
 @app.route("/api/metrics", methods=["GET", "OPTIONS"])
-def api_metrics():
+def api_admin_stats():
     if request.method == "OPTIONS":
         return jsonify({"status": "ok"})
     metrics = get_metrics()
-    all_scans = get_scans()
-    metrics["total_scans"] = max(metrics.get("total_scans", 0), len(all_scans))
-    metrics["successful_treatments"] = max(metrics.get("successful_treatments", 0), len([s for s in all_scans if s.get("status") == "Treated"]))
     return jsonify(metrics), 200
+
+@app.route("/api/users/count", methods=["GET", "OPTIONS"])
+def api_users_count():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+    mobile_count = get_mobile_user_count()
+    total_count = execute_db_operation(lambda d: d["users"].count_documents({}), fallback_fn=lambda: len(get_users()))
+    return jsonify({
+        "count": mobile_count,
+        "total_users": mobile_count,
+        "registered_mobile_users": mobile_count,
+        "totalUsersCount": mobile_count,
+        "total_accounts": total_count
+    }), 200
+
+@app.route("/api/metrics/reset", methods=["POST", "OPTIONS"])
+def api_metrics_reset():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+    clean_zero_metrics = {
+        "total_scans": 0,
+        "successful_treatments": 0,
+        "stain_counts": {"Used Cooking Oil": 0, "Black Ballpen Ink": 0, "Mud": 0}
+    }
+    save_metrics(clean_zero_metrics)
+    add_log("info", "Metrics counters reset to 0 by Administrator.")
+    return jsonify({"success": True, "message": "Metrics reset to 0", "metrics": clean_zero_metrics}), 200
 
 @app.route("/api/logs", methods=["GET", "POST", "OPTIONS"])
 def api_logs():
@@ -933,7 +1260,8 @@ def predict():
                 stain_name=predicted_label,
                 fabric_name=f"{rec['fabric_color']} (100%)",
                 confidence=confidence_percent,
-                email=data.get("email")
+                email=data.get("email"),
+                image=data.get("image", "")
             )
             return jsonify({
                 "id":                   scan_id,
@@ -971,7 +1299,8 @@ def predict():
             stain_name=predicted_label,
             fabric_name=f"{rec['fabric_color']} (100%)",
             confidence=confidence_percent,
-            email=data.get("email")
+            email=data.get("email"),
+            image=data.get("image", "")
         )
 
         print(f"Prediction: {predicted_raw} / {predicted_label} ({confidence_percent}% confidence) | "
