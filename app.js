@@ -1285,32 +1285,32 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // 1. Check if scan is below 70% threshold (Unidentified / Inconclusive)
         if (isLowConfidence) {
-            const warningBanner = I18N.currentLang === "hil"
-                ? "Indi Masigurado nga Pag-scan (<70%). Indi maathag o wala makilal-an ang litrato. Palihog mag-scan sang maathag, may maayo nga suga nga litrato sang digo sa bayo nga bulak."
-                : "Inconclusive Scan (<70%). Photo is ambiguous or not recognized. Please scan a clear, well-lit photo of a stained cotton garment.";
             const displayTitle = I18N.currentLang === "hil" ? "Indi Masigurado nga Digo" : "Unidentified Stain";
             const displayFabric = I18N.currentLang === "hil" ? "Wala Makilal-an / N/A" : "Unidentified / N/A";
 
-            resultsBadge.className = "results-badge inconclusive";
-            resultsBadge.innerHTML = `<i class="fas fa-triangle-exclamation"></i> <span>${I18N.currentLang === "hil" ? "Indi Masigurado (<70%)" : "Inconclusive (<70%)"}</span>`;
-            resultsBadge.style.backgroundColor = "rgba(234, 179, 8, 0.15)";
-            resultsBadge.style.color = "#eab308";
+            // Hide the top status badge altogether for inconclusive scans (<70%)
+            if (resultsBadge) {
+                resultsBadge.style.display = "none";
+            }
 
+            const resultsCardEl = document.getElementById("resultsCard");
+            if (resultsCardEl) {
+                resultsCardEl.style.borderColor = "rgba(255, 255, 255, 0.1)";
+            }
+
+            // Core fields clearly visible
             resultStainType.textContent = displayTitle;
             resultFabricType.textContent = displayFabric;
             resultConfidence.textContent = `${confNum}%`;
             resultConfidenceBar.style.width = `${confNum}%`;
             resultConfidenceBar.className = "confidence-bar warning";
 
-            if (resultCautionCard && resultCautionText) {
-                resultCautionText.textContent = warningBanner;
-                if (resultCautionTitle) {
-                    resultCautionTitle.textContent = I18N.currentLang === "hil" ? "Pahamangno sa Pag-scan" : "Inconclusive Scan Notice";
-                }
-                resultCautionCard.style.display = "block";
+            // Hide bottom notice warning card so UI remains sleek and uncluttered
+            if (resultCautionCard) {
+                resultCautionCard.style.display = "none";
             }
 
-            // Strictly do NOT return/display cleaning procedure or guide button for low-confidence scans
+            // Strictly do NOT display cleaning procedure or guide button for low-confidence scans
             if (resultProcedureCard) resultProcedureCard.style.display = "none";
             if (btnViewCleaningGuide) btnViewCleaningGuide.style.display = "none";
 
@@ -1325,7 +1325,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 confidence: confNum,
                 probabilities: (recommendation && recommendation.probabilities) ? recommendation.probabilities : null,
                 steps: [],
-                caution: warningBanner,
+                caution: "",
                 materials: [],
                 timestamp: new Date().toISOString(),
                 status: "Pending",
@@ -1348,6 +1348,11 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         // 2. High-confidence scan (>= 70%)
+        const resultsCardEl = document.getElementById("resultsCard");
+        if (resultsCardEl) {
+            resultsCardEl.style.borderColor = "rgba(16, 185, 129, 0.2)";
+        }
+
         const isStainSupported = stain !== "Unknown Stain" && stain !== "Unidentified";
         let rec = getCleaningRecommendation(stain, fabric, I18N.currentLang);
         if (!rec && recommendation && recommendation.steps && recommendation.steps.length) {
@@ -1360,10 +1365,13 @@ document.addEventListener("DOMContentLoaded", () => {
         const caution = (rec && rec.caution) ? rec.caution : "";
         const materials = (rec && rec.materials) ? rec.materials : [];
 
-        resultsBadge.className = "results-badge";
-        resultsBadge.innerHTML = `<i class="fas fa-check-circle"></i> <span data-i18n="badge_detection_successful">${I18N.t("badge_detection_successful")}</span>`;
-        resultsBadge.style.backgroundColor = "";
-        resultsBadge.style.color = "";
+        if (resultsBadge) {
+            resultsBadge.style.display = "inline-flex";
+            resultsBadge.className = "results-badge";
+            resultsBadge.innerHTML = `<i class="fas fa-check-circle"></i> <span data-i18n="badge_detection_successful">${I18N.t("badge_detection_successful")}</span>`;
+            resultsBadge.style.backgroundColor = "";
+            resultsBadge.style.color = "";
+        }
         resultConfidenceBar.className = "confidence-bar";
         if (btnViewCleaningGuide) btnViewCleaningGuide.style.display = "inline-flex";
 
