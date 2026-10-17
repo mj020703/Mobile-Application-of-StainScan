@@ -23,4 +23,6 @@ DataSet/
 !stain_model.keras
 !stainscan_model.pth
 !stainscan_logo.png
+!sample_data_urls.js
+!samples/*.jpg
 .vscode/

@@ -230,6 +230,37 @@
                             </div>
                         </div>
 
+                        <!-- Quick Test Samples Selector -->
+                        <div class="quick-samples-card" id="quickSamplesCard">
+                            <div class="quick-samples-header">
+                                <span class="quick-samples-title">
+                                    <i class="fas fa-flask-vial"></i>
+                                    <span data-i18n="quick_samples_title">Quick Test Samples</span>
+                                </span>
+                                <span class="quick-samples-subtitle" data-i18n="quick_samples_subtitle">Tap to test real dataset stains with 1-tap</span>
+                            </div>
+                            <div class="quick-samples-chips">
+                                <button type="button" class="btn-sample-chip" data-sample="ink_white" title="Ballpen Ink on White Cotton">
+                                    <i class="fas fa-pen-nib"></i> <span>Ballpen Ink</span>
+                                </button>
+                                <button type="button" class="btn-sample-chip" data-sample="oil_white" title="Used Cooking Oil on White Cotton">
+                                    <i class="fas fa-oil-can"></i> <span>Cooking Oil</span>
+                                </button>
+                                <button type="button" class="btn-sample-chip" data-sample="mud_white" title="Mud Stain on White Cotton">
+                                    <i class="fas fa-mountain"></i> <span>Mud Stain</span>
+                                </button>
+                                <button type="button" class="btn-sample-chip chip-grey" data-sample="ink_grey" title="Ballpen Ink on Grey Cotton">
+                                    <i class="fas fa-feather"></i> <span>Grey Ink</span>
+                                </button>
+                                <button type="button" class="btn-sample-chip chip-grey" data-sample="oil_grey" title="Used Cooking Oil on Grey Cotton">
+                                    <i class="fas fa-droplet"></i> <span>Grey Oil</span>
+                                </button>
+                                <button type="button" class="btn-sample-chip chip-grey" data-sample="mud_grey" title="Mud on Grey Cotton">
+                                    <i class="fas fa-cloud-rain"></i> <span>Grey Mud</span>
+                                </button>
+                            </div>
+                        </div>
+
                         <!-- Analysis Action / Controls -->
                         <div class="scan-controls" id="scanControls" style="display: none;">
                             <button class="btn btn-primary btn-block" id="btnAnalyzeStain">
@@ -609,7 +640,10 @@
     <!-- Toast Notifications -->
     <div class="toast-container" id="toastContainer"></div>
 
+    <!-- Test Samples Data URLs -->
+    <script src="sample_data_urls.js"></script>
+
     <!-- App JavaScript -->
-    <script src="app.js?v=3.4"></script>
+    <script src="app.js?v=3.5"></script>
 </body>
 </html>

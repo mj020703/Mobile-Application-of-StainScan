@@ -250,6 +250,8 @@ const I18N = {
             pro_tip_desc: "Always treat stains as early as possible. Fresh stains are significantly easier to extract than dried-in stains.",
             scan_title: "Analyze Fabric Stain",
             scan_subtitle: "Upload a clear photo of your stained cotton garment.",
+            quick_samples_title: "Quick Test Samples",
+            quick_samples_subtitle: "Tap to test real dataset stains with 1-tap",
             upload_tap: "Tap to Select Photo",
             upload_drag: "Or drag and drop image here",
             upload_limits: "JPG, PNG up to 10MB (Cotton Fabrics)",
@@ -330,6 +332,8 @@ const I18N = {
             pro_tip_desc: "Tinlui pirme ang digo sang temprano pa. Ang preska nga digo mas mahapos kuhaon sangsa uga na.",
             scan_title: "Usisaon ang Digo sa Tela",
             scan_subtitle: "Mag-upload sang maathag nga litrato sang imo may digo nga bayo nga bulak (cotton).",
+            quick_samples_title: "Mga Halimbawa sang Digo",
+            quick_samples_subtitle: "Pinduta agud testingan ang matuod nga digo",
             upload_tap: "Pinduta agud Magpili sang Litrato",
             upload_drag: "Ukon idul-ong kag ihulog ang litrato diri",
             upload_limits: "JPG, PNG tubtob 10MB (Tela nga Bulak)",
@@ -1120,12 +1124,38 @@ document.addEventListener("DOMContentLoaded", () => {
         resultsCard.style.display = "none";
         scanOverlayLine.style.display = "none";
         if (scannerLoader) scannerLoader.style.display = "none";
+        document.querySelectorAll(".btn-sample-chip").forEach(b => b.classList.remove("active"));
     }
 
     // Clear Preview
     btnClearPreview.addEventListener("click", (e) => {
         e.stopPropagation();
         resetScanFormState();
+    });
+
+    // Quick Test Sample Chips Listener
+    document.querySelectorAll(".btn-sample-chip").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const sampleKey = btn.getAttribute("data-sample");
+            if (typeof SAMPLE_STAINS !== "undefined" && SAMPLE_STAINS[sampleKey]) {
+                selectedImageBase64 = SAMPLE_STAINS[sampleKey];
+                uploadedImagePreview.src = selectedImageBase64;
+                uploadEmptyState.style.display = "none";
+                uploadPreviewState.style.display = "block";
+                scanControls.style.display = "block";
+                resultsCard.style.display = "none";
+
+                document.querySelectorAll(".btn-sample-chip").forEach(b => b.classList.remove("active"));
+                btn.classList.add("active");
+
+                const simStain = document.getElementById("sim-stain");
+                if (simStain) simStain.value = "live";
+
+                const chipName = btn.querySelector("span") ? btn.querySelector("span").textContent : sampleKey;
+                showToast(`Loaded ${chipName} sample! Tap 'Begin Intelligent CNN Analysis' below.`, "info");
+            }
+        });
     });
 
     // Analyze Stain action
@@ -1229,7 +1259,9 @@ document.addEventListener("DOMContentLoaded", () => {
                         } else if (predictionResult && !predictionResult.error) {
                             const rawStain = predictionResult.stain_classification || predictionResult.stain || "Unknown Stain";
                             let displayStain = predictionResult.stain || rawStain;
-                            if (rawStain.toLowerCase().includes("ballpen") || rawStain.toLowerCase().includes("ink")) {
+                            if (predictionResult.status === "inconclusive" || displayStain.includes("Inconclusive")) {
+                                displayStain = "Inconclusive Stain";
+                            } else if (rawStain.toLowerCase().includes("ballpen") || rawStain.toLowerCase().includes("ink")) {
                                 displayStain = "Black Ballpen Ink";
                             } else if (rawStain.toLowerCase().includes("cooking") || rawStain.toLowerCase().includes("oil")) {
                                 displayStain = "Used Cooking Oil";
@@ -1283,6 +1315,11 @@ document.addEventListener("DOMContentLoaded", () => {
         const isCotton = fabric.includes("Cotton") || fabric.includes("Bulak");
         const isStainSupported = stain !== "Unknown Stain";
 
+        // Check if backend returned an inconclusive scan or low confidence
+        const isInconclusive = (recommendation && recommendation.status === "inconclusive") || 
+            stain.includes("Inconclusive") || 
+            (confidence < 75 && !stain.toLowerCase().includes("ballpen") && !stain.toLowerCase().includes("cooking") && !stain.toLowerCase().includes("mud"));
+
         // Extract or lookup precise dynamic recommendation based on active language
         let rec = getCleaningRecommendation(stain, fabric, I18N.currentLang);
         if (!rec && recommendation && recommendation.steps && recommendation.steps.length) {
@@ -1296,11 +1333,56 @@ document.addEventListener("DOMContentLoaded", () => {
         const materials = (rec && rec.materials) ? rec.materials : [];
         const fabricColor = (rec && rec.fabric_color) ? rec.fabric_color : fabric;
 
-        // Reset badge styles in case a previous scan failed
         const resultsBadge = document.querySelector(".results-card .results-badge");
+        const resultStainType = document.getElementById("resultStainType");
+        const resultFabricType = document.getElementById("resultFabricType");
+        const resultConfidence = document.getElementById("resultConfidence");
+        const resultConfidenceBar = document.getElementById("resultConfidenceBar");
+        const resultCautionCard = document.getElementById("resultCautionCard");
+        const resultCautionText = document.getElementById("resultCautionText");
+        const resultCautionTitle = document.getElementById("resultCautionTitle");
+        const resultProcedureCard = document.getElementById("resultProcedureCard");
+        const resultProcedureStepCount = document.getElementById("resultProcedureStepCount");
+
+        if (isInconclusive) {
+            resultsBadge.className = "results-badge inconclusive";
+            resultsBadge.innerHTML = `<i class="fas fa-triangle-exclamation"></i> <span>${I18N.currentLang === "hil" ? "Indi Masigurado (<75%)" : "Inconclusive (<75%)"}</span>`;
+            resultsBadge.style.backgroundColor = "";
+            resultsBadge.style.color = "";
+
+            resultStainType.textContent = I18N.currentLang === "hil" ? "Indi Masigurado nga Digo" : "Inconclusive Pattern";
+            resultFabricType.textContent = I18N.tFabric(fabricColor.includes("100%") ? fabricColor : `${fabricColor} (100%)`);
+            resultConfidence.textContent = `${confidence}%`;
+            resultConfidenceBar.style.width = `${confidence}%`;
+            resultConfidenceBar.className = "confidence-bar warning";
+
+            document.getElementById("btnViewCleaningGuide").style.display = "none";
+            if (resultProcedureCard) resultProcedureCard.style.display = "none";
+
+            const cautionMsg = (recommendation && (recommendation.caution || recommendation.message))
+                ? (recommendation.caution || recommendation.message)
+                : (I18N.currentLang === "hil"
+                    ? "Manubo ang kumpirmasyon sang CNN (<70%). Siguraduha nga ang litrato maathag, may maayo nga suga, kag nakatutok sa digo sang bayo nga bulak."
+                    : "Low confidence detection (<70%). Stain patterns were ambiguous or not recognized. Please ensure good lighting and upload a close-up of a stained cotton garment (Ballpen Ink, Cooking Oil, or Mud).");
+
+            if (resultCautionCard && resultCautionText) {
+                resultCautionText.textContent = cautionMsg;
+                if (resultCautionTitle) {
+                    resultCautionTitle.textContent = I18N.currentLang === "hil" ? "Pahamangno sa Pag-scan" : "Inconclusive Scan Notice";
+                }
+                resultCautionCard.style.display = "block";
+            }
+            resultsCard.style.display = "block";
+            DataStore.addLog("warning", `Inconclusive CNN Scan: ${confidence}% confidence`);
+            return;
+        }
+
+        // Reset badge styles in case a previous scan was inconclusive or failed
+        resultsBadge.className = "results-badge";
         resultsBadge.innerHTML = `<i class="fas fa-check-circle"></i> <span data-i18n="badge_detection_successful">${I18N.t("badge_detection_successful")}</span>`;
         resultsBadge.style.backgroundColor = "";
         resultsBadge.style.color = "";
+        resultConfidenceBar.className = "confidence-bar";
         document.getElementById("btnViewCleaningGuide").style.display = "inline-flex";
 
         const resultStainType = document.getElementById("resultStainType");

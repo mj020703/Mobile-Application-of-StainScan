@@ -1295,6 +1295,53 @@ def predict():
 
         # Retrieve dynamic recommendation based on stain and fabric context
         rec = get_recommendation(predicted_label, fabric_context, image=image)
+
+        # Check central crop luminance to detect extreme underexposure
+        w, h = image.size
+        crop_box = (int(w * 0.15), int(h * 0.15), int(w * 0.85), int(h * 0.85))
+        cropped = image.crop(crop_box).convert("L")
+        crop_arr = np.array(cropped)
+        mean_lum = float(np.mean(crop_arr))
+
+        is_low_light = mean_lum < 25
+        is_inconclusive = (confidence_percent < 75) or is_low_light
+
+        if is_inconclusive:
+            caution_msg = (
+                "Low light alert: Image is severely underexposed. Please photograph under bright, even lighting."
+                if is_low_light else
+                f"Low confidence ({confidence_percent}%). Stain features are ambiguous or not recognized (<75%). Ensure the photo is a clear, well-lit close-up of a stained cotton garment (Ballpen Ink, Cooking Oil, or Mud)."
+            )
+            metrics, scan_id = increment_scan_count(
+                stain_name="Inconclusive",
+                fabric_name=f"{rec['fabric_color']} (100%)",
+                confidence=confidence_percent,
+                email=data.get("email"),
+                image=data.get("image", "")
+            )
+            print(f"Inconclusive Scan: {confidence_percent}% confidence | Mean Lum: {mean_lum:.1f}")
+            return jsonify({
+                "id":                   scan_id,
+                "status":               "inconclusive",
+                "stain_classification": "Inconclusive Stain",
+                "fabric_material":      "Cotton",
+                "fabric_color":         rec["fabric_color"],
+                "confidence":           confidence_percent,
+                "stain":                "Inconclusive Stain",
+                "fabric":               f"{rec['fabric_color']} (100%)",
+                "steps":                [],
+                "caution":              caution_msg,
+                "materials":            [],
+                "recommendation": {
+                    "id": scan_id,
+                    "steps": [],
+                    "caution": caution_msg,
+                    "materials": [],
+                    "fabric_color": rec["fabric_color"]
+                },
+                "message": caution_msg
+            })
+
         metrics, scan_id = increment_scan_count(
             stain_name=predicted_label,
             fabric_name=f"{rec['fabric_color']} (100%)",
@@ -1309,6 +1356,7 @@ def predict():
         # Return actual model prediction with fabric-specific steps and caution
         return jsonify({
             "id":                   scan_id,
+            "status":               "success",
             "stain_classification": predicted_raw,
             "fabric_material":      "Cotton",
             "fabric_color":         rec["fabric_color"],
