@@ -640,10 +640,18 @@
     <!-- Toast Notifications -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <!-- Test Samples Data URLs -->
-    <script src="sample_data_urls.js"></script>
-
     <!-- App JavaScript -->
-    <script src="app.js?v=3.5"></script>
+    <script src="app.js"></script>
+
+    <!-- Fail-safe splash dismiss for slow mobile WebView runtimes -->
+    <script>
+        setTimeout(function() {
+            var splash = document.getElementById("splash-screen");
+            if (splash && splash.style.display !== "none") {
+                splash.classList.add("fade-out");
+                setTimeout(function() { splash.style.display = "none"; }, 450);
+            }
+        }, 5000);
+    </script>
 </body>
 </html>
