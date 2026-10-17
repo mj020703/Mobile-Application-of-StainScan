@@ -400,8 +400,11 @@ const I18N = {
     },
     tStain(stain) {
         if (!stain) return "";
-        if (this.currentLang !== "hil") return stain;
         const s = String(stain).toLowerCase();
+        if (s.includes("unidentified") || s.includes("inconclusive") || s.includes("not classified")) {
+            return this.currentLang === "hil" ? "Indi Masigurado nga Digo" : "Unidentified Stain";
+        }
+        if (this.currentLang !== "hil") return stain;
         if (s.includes("ballpen") || s.includes("ink") || s.includes("tinta")) return this.t("stain_ballpen_ink");
         if (s.includes("oil") || s.includes("cooking") || s.includes("mantika")) return this.t("stain_cooking_oil");
         if (s.includes("mud") || s.includes("lapok")) return this.t("stain_mud");
@@ -526,21 +529,28 @@ class DataStore {
         try {
             const res = await fetch(this.getApiUrl(`/api/scans?email=${encodeURIComponent(email)}`));
             if (res.ok) {
-                const scans = await res.json();
+                let scans = await res.json();
+                scans = scans.map(item => {
+                    const conf = parseInt(item.confidence) || 0;
+                    if (conf < 70 && item.stain !== "Unidentified" && item.stain !== "Unidentified Stain") {
+                        item.stain = "Unidentified";
+                    }
+                    return item;
+                });
                 localStorage.setItem(`stainscan_history_${email}`, JSON.stringify(scans));
                 return scans;
             }
         } catch (e) {
             console.warn("Failed to get scans from cloud, using offline cache:", e);
         }
-        return JSON.parse(localStorage.getItem(`stainscan_history_${email}`)) || [];
+        return this.getHistory(email);
     }
 
     static async saveHistoryCloud(scanItem) {
         const email = scanItem.email;
-        const localHist = JSON.parse(localStorage.getItem(`stainscan_history_${email}`)) || [];
+        const localHist = this.getHistory(email);
         localHist.unshift(scanItem);
-        localStorage.setItem(`stainscan_history_${email}`, JSON.stringify(localHist.slice(0, 10)));
+        this.saveHistory(localHist.slice(0, 10), email);
 
         try {
             await fetch(this.getApiUrl("/api/scans"), {
@@ -577,7 +587,20 @@ class DataStore {
     static getHistory(email) {
         const user = email || (JSON.parse(sessionStorage.getItem("stainscan_current_user")) || {}).email;
         if (!user) return [];
-        return JSON.parse(localStorage.getItem(`stainscan_history_${user}`)) || [];
+        const raw = JSON.parse(localStorage.getItem(`stainscan_history_${user}`)) || [];
+        let modified = false;
+        const normalized = raw.map(item => {
+            const conf = parseInt(item.confidence) || 0;
+            if (conf < 70 && item.stain !== "Unidentified" && item.stain !== "Unidentified Stain") {
+                item.stain = "Unidentified";
+                modified = true;
+            }
+            return item;
+        });
+        if (modified) {
+            localStorage.setItem(`stainscan_history_${user}`, JSON.stringify(normalized));
+        }
+        return normalized;
     }
 
     static saveHistory(hist, email) {
@@ -903,7 +926,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // --- USER DASHBOARD MODULE ---
     function renderDashboard(historyList) {
-        const history = historyList || JSON.parse(localStorage.getItem(`stainscan_history_${currentUser.email}`)) || [];
+        const rawHistory = historyList || DataStore.getHistory();
+        const history = rawHistory.map(item => {
+            const conf = parseInt(item.confidence) || 0;
+            if (conf < 70 && item.stain !== "Unidentified" && item.stain !== "Unidentified Stain") {
+                item.stain = "Unidentified";
+            }
+            return item;
+        });
 
         // Update stats
         document.getElementById("statTotalScans").textContent = history.length;
@@ -930,12 +960,19 @@ document.addEventListener("DOMContentLoaded", () => {
             const itemEl = document.createElement("div");
             itemEl.className = "scan-item";
 
-            let classType = "unknown";
-            let icon = "fa-question";
+            const confVal = parseInt(item.confidence) || 0;
+            const isUnidentified = confVal < 70 || item.stain === "Unidentified" || item.stain === "Unidentified Stain" || item.stain === "Not Classified";
 
-            if (item.stain === "Mud") { classType = "mud"; icon = "fa-mound"; }
-            else if (item.stain === "Used Cooking Oil") { classType = "oil"; icon = "fa-bottle-droplet"; }
-            else if (item.stain === "Black Ballpen Ink") { classType = "ink"; icon = "fa-pen-clip"; }
+            let classType = "unknown";
+            let icon = "fa-triangle-exclamation";
+            let displayTitle = I18N.currentLang === "hil" ? "Indi Masigurado nga Digo" : "Unidentified Stain";
+
+            if (!isUnidentified) {
+                if (item.stain === "Mud") { classType = "mud"; icon = "fa-mound"; }
+                else if (item.stain === "Used Cooking Oil") { classType = "oil"; icon = "fa-bottle-droplet"; }
+                else if (item.stain === "Black Ballpen Ink") { classType = "ink"; icon = "fa-pen-clip"; }
+                displayTitle = I18N.tStain(item.stain);
+            }
 
             const formattedDate = new Date(item.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
             const statusClass = item.status.toLowerCase();
@@ -944,17 +981,21 @@ document.addEventListener("DOMContentLoaded", () => {
                 <div class="scan-item-left">
                     <div class="scan-item-badge ${classType}"><i class="fas ${icon}"></i></div>
                     <div class="scan-item-details">
-                        <span class="scan-title">${item.stain}</span>
+                        <span class="scan-title">${displayTitle}</span>
                         <span class="scan-meta">${formattedDate} • ${item.fabric}</span>
                     </div>
                 </div>
                 <div class="scan-item-right">
-                    <span class="scan-conf">${item.confidence}% AI</span>
+                    <span class="scan-conf">${confVal}% AI</span>
                     <span class="scan-status-tag ${statusClass}">${item.status}</span>
                 </div>
             `;
 
             itemEl.addEventListener("click", () => {
+                if (isUnidentified) {
+                    showToast(I18N.currentLang === "hil" ? "Wala sing giya para sa indi masigurado nga digo (<70%)." : "Treatment guide is not available for unidentified stains (<70%).", "warning");
+                    return;
+                }
                 openCleaningGuide(item);
             });
 
@@ -1151,16 +1192,22 @@ document.addEventListener("DOMContentLoaded", () => {
                         processScanningFailure(predictionError.message || "Connection refused");
                     } else if (predictionResult && !predictionResult.error) {
                         const rawStain = predictionResult.stain_classification || predictionResult.stain || "Unknown Stain";
-                        let displayStain = predictionResult.stain || rawStain;
-                        if (rawStain.toLowerCase().includes("ballpen") || rawStain.toLowerCase().includes("ink")) {
-                            displayStain = "Black Ballpen Ink";
-                        } else if (rawStain.toLowerCase().includes("cooking") || rawStain.toLowerCase().includes("oil")) {
-                            displayStain = "Used Cooking Oil";
-                        } else if (rawStain.toLowerCase().includes("mud")) {
-                            displayStain = "Mud";
+                        const confVal = parseInt(predictionResult.confidence) || 0;
+                        const isClassified = predictionResult.is_classified !== false && confVal >= 70 && predictionResult.status !== "Unidentified";
+                        let displayStain = "Unidentified Stain";
+                        if (isClassified) {
+                            if (rawStain.toLowerCase().includes("ballpen") || rawStain.toLowerCase().includes("ink")) {
+                                displayStain = "Black Ballpen Ink";
+                            } else if (rawStain.toLowerCase().includes("cooking") || rawStain.toLowerCase().includes("oil")) {
+                                displayStain = "Used Cooking Oil";
+                            } else if (rawStain.toLowerCase().includes("mud")) {
+                                displayStain = "Mud";
+                            } else {
+                                displayStain = predictionResult.stain || rawStain;
+                            }
                         }
                         const fabricMat = predictionResult.fabric || (predictionResult.fabric_color ? `${predictionResult.fabric_color} (100%)` : "Cotton Fabric (100%)");
-                        processScanningSuccess(displayStain, fabricMat, predictionResult.confidence, predictionResult);
+                        processScanningSuccess(displayStain, fabricMat, confVal, predictionResult);
                     } else {
                         const errMsg = (predictionResult && predictionResult.error) ? predictionResult.error : "Unknown backend error";
                         processScanningFailure(errMsg);
@@ -1199,26 +1246,15 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function processScanningSuccess(stain, fabric, confidence, recommendation = null) {
+        const confNum = parseInt(confidence) || 0;
         const isCotton = fabric.includes("Cotton") || fabric.includes("Bulak");
-        const isStainSupported = stain !== "Unknown Stain";
+        const isLowConfidence = confNum < 70 ||
+            stain === "Unidentified" ||
+            stain === "Unidentified Stain" ||
+            stain === "Not Classified" ||
+            (recommendation && (recommendation.is_classified === false || recommendation.status === "Unidentified" || recommendation.status === "inconclusive"));
 
-        // Check if backend returned an inconclusive scan or low confidence
-        const isInconclusive = (recommendation && recommendation.status === "inconclusive") || 
-            stain.includes("Inconclusive") || 
-            (confidence < 75 && !stain.toLowerCase().includes("ballpen") && !stain.toLowerCase().includes("cooking") && !stain.toLowerCase().includes("mud"));
-
-        // Extract or lookup precise dynamic recommendation based on active language
-        let rec = getCleaningRecommendation(stain, fabric, I18N.currentLang);
-        if (!rec && recommendation && recommendation.steps && recommendation.steps.length) {
-            rec = recommendation;
-        } else if (!rec && recommendation && recommendation.recommendation && recommendation.recommendation.steps) {
-            rec = recommendation.recommendation;
-        }
-
-        const steps = (rec && rec.steps) ? rec.steps : [];
-        const caution = (rec && rec.caution) ? rec.caution : "";
-        const materials = (rec && rec.materials) ? rec.materials : [];
-        const fabricColor = (rec && rec.fabric_color) ? rec.fabric_color : fabric;
+        const fabricColor = (recommendation && recommendation.fabric_color) ? recommendation.fabric_color : fabric;
 
         const resultsBadge = document.querySelector(".results-card .results-badge");
         const resultStainType = document.getElementById("resultStainType");
@@ -1230,47 +1266,89 @@ document.addEventListener("DOMContentLoaded", () => {
         const resultCautionTitle = document.getElementById("resultCautionTitle");
         const resultProcedureCard = document.getElementById("resultProcedureCard");
         const resultProcedureStepCount = document.getElementById("resultProcedureStepCount");
+        const btnViewCleaningGuide = document.getElementById("btnViewCleaningGuide");
 
-        if (isInconclusive) {
+        // 1. Check if scan is below 70% threshold (Unidentified / Inconclusive)
+        if (isLowConfidence) {
+            const warningBanner = I18N.currentLang === "hil"
+                ? "Indi Masigurado nga Pag-scan (<70%). Indi maathag o wala makilal-an ang litrato. Palihog mag-scan sang maathag, may maayo nga suga nga litrato sang digo sa bayo nga bulak."
+                : "Inconclusive Scan (<70%). Photo is ambiguous or not recognized. Please scan a clear, well-lit photo of a stained cotton garment.";
+            const displayTitle = I18N.currentLang === "hil" ? "Indi Masigurado nga Digo" : "Unidentified Stain";
+
             resultsBadge.className = "results-badge inconclusive";
-            resultsBadge.innerHTML = `<i class="fas fa-triangle-exclamation"></i> <span>${I18N.currentLang === "hil" ? "Indi Masigurado (<75%)" : "Inconclusive (<75%)"}</span>`;
-            resultsBadge.style.backgroundColor = "";
-            resultsBadge.style.color = "";
+            resultsBadge.innerHTML = `<i class="fas fa-triangle-exclamation"></i> <span>${I18N.currentLang === "hil" ? "Indi Masigurado (<70%)" : "Inconclusive (<70%)"}</span>`;
+            resultsBadge.style.backgroundColor = "rgba(234, 179, 8, 0.15)";
+            resultsBadge.style.color = "#eab308";
 
-            resultStainType.textContent = I18N.currentLang === "hil" ? "Indi Masigurado nga Digo" : "Inconclusive Pattern";
+            resultStainType.textContent = displayTitle;
             resultFabricType.textContent = I18N.tFabric(fabricColor.includes("100%") ? fabricColor : `${fabricColor} (100%)`);
-            resultConfidence.textContent = `${confidence}%`;
-            resultConfidenceBar.style.width = `${confidence}%`;
+            resultConfidence.textContent = `${confNum}%`;
+            resultConfidenceBar.style.width = `${confNum}%`;
             resultConfidenceBar.className = "confidence-bar warning";
 
-            document.getElementById("btnViewCleaningGuide").style.display = "none";
-            if (resultProcedureCard) resultProcedureCard.style.display = "none";
-
-            const cautionMsg = (recommendation && (recommendation.caution || recommendation.message))
-                ? (recommendation.caution || recommendation.message)
-                : (I18N.currentLang === "hil"
-                    ? "Manubo ang kumpirmasyon sang CNN (<70%). Siguraduha nga ang litrato maathag, may maayo nga suga, kag nakatutok sa digo sang bayo nga bulak."
-                    : "Low confidence detection (<70%). Stain patterns were ambiguous or not recognized. Please ensure good lighting and upload a close-up of a stained cotton garment (Ballpen Ink, Cooking Oil, or Mud).");
-
             if (resultCautionCard && resultCautionText) {
-                resultCautionText.textContent = cautionMsg;
+                resultCautionText.textContent = warningBanner;
                 if (resultCautionTitle) {
                     resultCautionTitle.textContent = I18N.currentLang === "hil" ? "Pahamangno sa Pag-scan" : "Inconclusive Scan Notice";
                 }
                 resultCautionCard.style.display = "block";
             }
+
+            // Strictly do NOT return/display cleaning procedure or guide button for low-confidence scans
+            if (resultProcedureCard) resultProcedureCard.style.display = "none";
+            if (btnViewCleaningGuide) btnViewCleaningGuide.style.display = "none";
+
+            const serverAssignedId = (recommendation && recommendation.id) ? recommendation.id : null;
+            scanResultData = {
+                id: serverAssignedId || ("h_" + Date.now()),
+                email: currentUser ? currentUser.email : "guest@stainscan.com",
+                stain: "Unidentified",
+                fabric: fabricColor.includes("100%") ? fabricColor : `${fabricColor} (100%)`,
+                fabric_color: fabricColor,
+                confidence: confNum,
+                probabilities: (recommendation && recommendation.probabilities) ? recommendation.probabilities : null,
+                steps: [],
+                caution: warningBanner,
+                materials: [],
+                timestamp: new Date().toISOString(),
+                status: "Pending",
+                image: selectedImageBase64 || ""
+            };
+
+            // Save low-confidence scan to history as "Unidentified"
+            const localHist = DataStore.getHistory();
+            localHist.unshift(scanResultData);
+            DataStore.saveHistory(localHist.slice(0, 10));
+
+            if (!serverAssignedId) {
+                DataStore.saveHistoryCloud(scanResultData);
+            }
+
+            DataStore.addLog("warning", `Inconclusive CNN Scan below 70%: Unidentified (${confNum}% confidence)`);
             resultsCard.style.display = "block";
-            DataStore.addLog("warning", `Inconclusive CNN Scan: ${confidence}% confidence`);
+            showToast(I18N.currentLang === "hil" ? "Indi Masigurado nga Pag-scan (<70%)" : "Inconclusive Scan (<70%)", "warning");
             return;
         }
 
-        // Reset badge styles in case a previous scan was inconclusive or failed
+        // 2. High-confidence scan (>= 70%)
+        const isStainSupported = stain !== "Unknown Stain" && stain !== "Unidentified";
+        let rec = getCleaningRecommendation(stain, fabric, I18N.currentLang);
+        if (!rec && recommendation && recommendation.steps && recommendation.steps.length) {
+            rec = recommendation;
+        } else if (!rec && recommendation && recommendation.recommendation && recommendation.recommendation.steps) {
+            rec = recommendation.recommendation;
+        }
+
+        const steps = (rec && rec.steps) ? rec.steps : [];
+        const caution = (rec && rec.caution) ? rec.caution : "";
+        const materials = (rec && rec.materials) ? rec.materials : [];
+
         resultsBadge.className = "results-badge";
         resultsBadge.innerHTML = `<i class="fas fa-check-circle"></i> <span data-i18n="badge_detection_successful">${I18N.t("badge_detection_successful")}</span>`;
         resultsBadge.style.backgroundColor = "";
         resultsBadge.style.color = "";
         resultConfidenceBar.className = "confidence-bar";
-        document.getElementById("btnViewCleaningGuide").style.display = "inline-flex";
+        if (btnViewCleaningGuide) btnViewCleaningGuide.style.display = "inline-flex";
 
         const serverAssignedId = (recommendation && recommendation.id)
             ? recommendation.id
@@ -1284,7 +1362,7 @@ document.addEventListener("DOMContentLoaded", () => {
             stain: stain,
             fabric: fabricColor.includes("100%") ? fabricColor : `${fabricColor} (100%)`,
             fabric_color: fabricColor,
-            confidence: confidence,
+            confidence: confNum,
             probabilities: (recommendation && recommendation.probabilities) ? recommendation.probabilities : null,
             steps: steps,
             caution: caution,
@@ -1296,8 +1374,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
         resultStainType.textContent = I18N.tStain(stain);
         resultFabricType.textContent = I18N.tFabric(scanResultData.fabric);
-        resultConfidence.textContent = `${confidence}%`;
-        resultConfidenceBar.style.width = `${confidence}%`;
+        resultConfidence.textContent = `${confNum}%`;
+        resultConfidenceBar.style.width = `${confNum}%`;
 
         // Render Highlighted Caution Card
         if (caution && resultCautionCard && resultCautionText) {
@@ -1323,19 +1401,19 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         if (!isCotton) {
-            document.getElementById("btnViewCleaningGuide").style.display = "none";
+            if (btnViewCleaningGuide) btnViewCleaningGuide.style.display = "none";
             if (resultCautionCard) resultCautionCard.style.display = "none";
             if (resultProcedureCard) resultProcedureCard.style.display = "none";
             DataStore.addLog("warning", `Unsupported fabric detected: ${fabric}`);
             showToast("Fabric Mismatch: Treatment plans are calibrated for 100% Cotton only.", "warning");
         } else if (!isStainSupported) {
-            document.getElementById("btnViewCleaningGuide").style.display = "none";
+            if (btnViewCleaningGuide) btnViewCleaningGuide.style.display = "none";
             if (resultCautionCard) resultCautionCard.style.display = "none";
             if (resultProcedureCard) resultProcedureCard.style.display = "none";
             DataStore.addLog("warning", `Unknown stain classified.`);
             showToast("Unsupported Stain: Unable to classify stain parameters.", "warning");
         } else {
-            document.getElementById("btnViewCleaningGuide").style.display = "inline-flex";
+            if (btnViewCleaningGuide) btnViewCleaningGuide.style.display = "inline-flex";
         }
 
         // Save scan locally for user's history tab
@@ -1343,12 +1421,10 @@ document.addEventListener("DOMContentLoaded", () => {
         localHist.unshift(scanResultData);
         DataStore.saveHistory(localHist.slice(0, 10));
 
-        // If this was an offline simulated scan (no server-assigned ID), upload to cloud.
-        // If it was already classified and logged by the server's /predict API, do NOT duplicate it!
         if (!serverAssignedId) {
             DataStore.saveHistoryCloud(scanResultData);
         }
-        DataStore.addLog("info", `Successful CNN scan: ${stain} on ${fabric} (${confidence}% confidence)`);
+        DataStore.addLog("info", `Successful CNN scan: ${stain} on ${fabric} (${confNum}% confidence)`);
 
         resultsCard.style.display = "block";
         showToast(I18N.currentLang === "hil" ? "Tapos na ang Pag-scan sang Tela!" : "Fabric Scan Complete!");
@@ -1422,12 +1498,19 @@ document.addEventListener("DOMContentLoaded", () => {
             const itemEl = document.createElement("div");
             itemEl.className = "scan-item";
 
-            let classType = "unknown";
-            let icon = "fa-question";
+            const confVal = parseInt(item.confidence) || 0;
+            const isUnidentified = confVal < 70 || item.stain === "Unidentified" || item.stain === "Unidentified Stain" || item.stain === "Not Classified";
 
-            if (item.stain === "Mud") { classType = "mud"; icon = "fa-mound"; }
-            else if (item.stain === "Used Cooking Oil") { classType = "oil"; icon = "fa-bottle-droplet"; }
-            else if (item.stain === "Black Ballpen Ink") { classType = "ink"; icon = "fa-pen-clip"; }
+            let classType = "unknown";
+            let icon = "fa-triangle-exclamation";
+            let displayTitle = I18N.currentLang === "hil" ? "Indi Masigurado nga Digo" : "Unidentified Stain";
+
+            if (!isUnidentified) {
+                if (item.stain === "Mud") { classType = "mud"; icon = "fa-mound"; }
+                else if (item.stain === "Used Cooking Oil") { classType = "oil"; icon = "fa-bottle-droplet"; }
+                else if (item.stain === "Black Ballpen Ink") { classType = "ink"; icon = "fa-pen-clip"; }
+                displayTitle = I18N.tStain(item.stain);
+            }
 
             const formattedDate = new Date(item.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
             const statusClass = item.status.toLowerCase();
@@ -1436,17 +1519,21 @@ document.addEventListener("DOMContentLoaded", () => {
                 <div class="scan-item-left">
                     <div class="scan-item-badge ${classType}"><i class="fas ${icon}"></i></div>
                     <div class="scan-item-details">
-                        <span class="scan-title">${item.stain}</span>
+                        <span class="scan-title">${displayTitle}</span>
                         <span class="scan-meta">${formattedDate} • ${item.fabric}</span>
                     </div>
                 </div>
                 <div class="scan-item-right">
-                    <span class="scan-conf">${item.confidence}% AI</span>
+                    <span class="scan-conf">${confVal}% AI</span>
                     <span class="scan-status-tag ${statusClass}">${item.status}</span>
                 </div>
             `;
 
             itemEl.addEventListener("click", () => {
+                if (isUnidentified) {
+                    showToast(I18N.currentLang === "hil" ? "Wala sing giya para sa indi masigurado nga digo (<70%)." : "Treatment guide is not available for unidentified stains (<70%).", "warning");
+                    return;
+                }
                 openCleaningGuide(item);
             });
 
@@ -1475,6 +1562,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnCompleteTreatment = document.getElementById("btnCompleteTreatment");
 
     function openCleaningGuide(historyItem) {
+        const confVal = parseInt(historyItem.confidence) || 0;
+        if (confVal < 70 || historyItem.stain === "Unidentified" || historyItem.stain === "Unidentified Stain" || historyItem.stain === "Not Classified") {
+            showToast(I18N.currentLang === "hil" ? "Wala sing giya para sa indi masigurado nga digo (<70%)." : "Treatment guide is not available for unidentified stains (<70%).", "warning");
+            return;
+        }
+
         activeGuideScanId = historyItem.id || historyItem._id;
         activeGuideItem = historyItem;
         

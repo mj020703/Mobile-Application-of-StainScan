@@ -366,17 +366,23 @@ document.addEventListener("DOMContentLoaded", () => {
                         ? `<span class="badge badge-success"><i class="fas fa-check-circle"></i> Treated</span>`
                         : `<span class="badge badge-warning"><i class="fas fa-clock"></i> Pending</span>`;
                     
-                    let stainColor = "var(--primary-color)";
-                    if (scan.stain === "Used Cooking Oil") stainColor = "#f59e0b";
-                    else if (scan.stain === "Black Ballpen Ink") stainColor = "#3b82f6";
-                    else if (scan.stain === "Mud") stainColor = "#8b5cf6";
+                    const confVal = parseInt(scan.confidence) || 0;
+                    const isUnidentified = confVal < 70 || scan.stain === "Unidentified" || scan.stain === "Unidentified Stain" || scan.stain === "Not Classified";
+                    const displayStain = isUnidentified ? "Unidentified" : (scan.stain || "Unknown");
+
+                    let stainColor = "#ef4444";
+                    if (!isUnidentified) {
+                        if (scan.stain === "Used Cooking Oil") stainColor = "#f59e0b";
+                        else if (scan.stain === "Black Ballpen Ink") stainColor = "#3b82f6";
+                        else if (scan.stain === "Mud") stainColor = "#8b5cf6";
+                    }
 
                     tr.innerHTML = `
                         <td>${dateStr}</td>
                         <td><strong>${scan.email || "mobile_user"}</strong></td>
-                        <td><span style="font-weight:600; color:${stainColor};">${scan.stain || "Unknown"}</span></td>
+                        <td><span style="font-weight:600; color:${stainColor};">${displayStain}</span></td>
                         <td>${scan.fabric || "Cotton (100%)"}</td>
-                        <td><strong>${scan.confidence || 0}%</strong></td>
+                        <td><strong>${confVal}%</strong></td>
                         <td>${statusBadge}</td>
                     `;
                     scansTableBody.appendChild(tr);

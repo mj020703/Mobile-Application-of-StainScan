@@ -488,7 +488,12 @@ def increment_scan_count(stain_name=None, fabric_name=None, confidence=None, ema
     metrics = get_metrics()
     metrics["total_scans"] = metrics.get("total_scans", 0) + 1
 
-    if stain_name:
+    conf_num = int(confidence or 0)
+    # Strictly enforce 70% confidence threshold: override stain to Unidentified if below 70%
+    if conf_num < 70:
+        stain_name = "Unidentified"
+
+    if stain_name and stain_name != "Unidentified":
         stain_counts = metrics.setdefault("stain_counts", {})
         stain_counts[stain_name] = stain_counts.get(stain_name, 0) + 1
 
@@ -499,16 +504,19 @@ def increment_scan_count(stain_name=None, fabric_name=None, confidence=None, ema
     new_scan = {
         "id": scan_id,
         "email": email or "mobile_user@stainscan.com",
-        "stain": stain_name or "Unknown",
+        "stain": stain_name or "Unidentified",
         "fabric": fabric_name or "Cotton Fabric (100%)",
-        "confidence": int(confidence or 90),
+        "confidence": conf_num,
         "timestamp": datetime.utcnow().isoformat(),
         "status": "Pending",
         "image": image or ""
     }
     try:
         add_scan(new_scan)
-        add_log("info", f"CNN Scan #{metrics['total_scans']} classified: {stain_name} ({confidence}%)")
+        if conf_num < 70:
+            add_log("warning", f"CNN Scan #{metrics['total_scans']} below 70% threshold: Unidentified ({conf_num}%)")
+        else:
+            add_log("info", f"CNN Scan #{metrics['total_scans']} classified: {stain_name} ({conf_num}%)")
     except Exception as e:
         print(f"Error logging scan record: {e}")
 
@@ -640,6 +648,15 @@ def get_scans(email=None):
     return execute_db_operation(_op, fallback_fn=_fb)
 
 def add_scan(scan):
+    # Enforce 70% confidence persistence check
+    conf_val = scan.get("confidence")
+    if conf_val is not None:
+        try:
+            if int(conf_val) < 70:
+                scan["stain"] = "Unidentified"
+        except (ValueError, TypeError):
+            pass
+
     def _op(d):
         result = d["scans"].insert_one(scan)
         scan["_id"] = str(result.inserted_id)
@@ -789,12 +806,14 @@ def api_scans():
         if not data or "email" not in data or "stain" not in data or "fabric" not in data or "confidence" not in data:
             return jsonify({"error": "Missing scan properties"}), 400
             
+        conf_num = int(data["confidence"])
+        stain_name = "Unidentified" if conf_num < 70 else data["stain"]
         new_scan = {
             "id": data.get("id", ""),
             "email": data["email"].strip().lower(),
-            "stain": data["stain"],
+            "stain": stain_name,
             "fabric": data["fabric"],
-            "confidence": int(data["confidence"]),
+            "confidence": conf_num,
             "timestamp": data.get("timestamp", datetime.utcnow().isoformat()),
             "status": data.get("status", "Pending"),
             "image": data.get("image", "")
@@ -867,13 +886,13 @@ def api_save_treatment_scan():
         return jsonify({"status": "ok"})
     data = request.get_json(silent=True) or {}
     scan_id = data.get("scan_id") or data.get("id") or ("h_" + datetime.utcnow().strftime("%Y%m%d%H%M%S"))
-    email = (data.get("email") or "mobile_user@stainscan.com").strip().lower()
-    stain = data.get("stain") or "Used Cooking Oil"
-    fabric = data.get("fabric") or data.get("fabric_color") or "Cotton Fabric (100%)"
     confidence = int(data.get("confidence") or 90)
+    stain = "Unidentified" if confidence < 70 else (data.get("stain") or "Used Cooking Oil")
+    fabric = data.get("fabric") or data.get("fabric_color") or "Cotton Fabric (100%)"
     status = data.get("status") or data.get("treatment_status") or "Treated"
     timestamp = data.get("timestamp") or datetime.utcnow().isoformat()
     image = data.get("image") or ""
+    email = (data.get("user_email") or data.get("email") or "mobile_user@stainscan.com").strip().lower()
 
     scan_doc = {
         "id": scan_id,
@@ -1260,7 +1279,8 @@ def predict():
         predictions = model.predict(input_arr, verbose=0)  # (1, 3) softmax probabilities
         probs       = predictions[0]                        # (3,)
         predicted_idx    = int(np.argmax(probs))
-        confidence_percent = int(round(float(probs[predicted_idx]) * 100))
+        max_confidence   = float(probs[predicted_idx])
+        confidence_percent = int(round(max_confidence * 100))
         predicted_raw    = CLASS_MAPPING_RAW.get(predicted_idx, "Unknown")
         predicted_label  = CLASS_MAPPING_DISPLAY.get(predicted_idx, predicted_raw)
 
@@ -1273,38 +1293,83 @@ def predict():
 
         # Retrieve dynamic recommendation based on stain and fabric context
         rec = get_recommendation(predicted_label, fabric_context, image=image)
+        fabric_color = rec.get("fabric_color", "White Cotton")
 
+        # STRICT 70% CONFIDENCE THRESHOLD CHECK
+        if max_confidence < 0.70 or confidence_percent < 70:
+            unidentified_title = "Unidentified Stain"
+            caution_message = "Inconclusive Scan (<70%). Photo is ambiguous or not recognized. Please scan a clear, well-lit photo of a stained cotton garment."
+
+            metrics, scan_id = increment_scan_count(
+                stain_name="Unidentified",
+                fabric_name=f"{fabric_color} (100%)",
+                confidence=confidence_percent,
+                email=data.get("email"),
+                image=data.get("image", "")
+            )
+
+            print(f"Prediction below 70% threshold ({confidence_percent}%): {predicted_raw} -> Unidentified Stain | Probs: {probabilities}")
+
+            return jsonify({
+                "id":                   scan_id,
+                "status":               "Unidentified",
+                "is_classified":        False,
+                "stain_classification": "Unidentified",
+                "fabric_material":      "Cotton",
+                "fabric_color":         fabric_color,
+                "confidence":           confidence_percent,
+                "probabilities":        probabilities,
+                "stain":                unidentified_title,
+                "fabric":               f"{fabric_color} (100%)",
+                "steps":                [],
+                "caution":              caution_message,
+                "materials":            [],
+                "recommendation": {
+                    "id":            scan_id,
+                    "status":        "inconclusive",
+                    "is_classified": False,
+                    "steps":         [],
+                    "caution":       caution_message,
+                    "materials":     [],
+                    "fabric_color":  fabric_color
+                }
+            })
+
+        # Confident classification (>= 70%)
         metrics, scan_id = increment_scan_count(
             stain_name=predicted_label,
-            fabric_name=f"{rec['fabric_color']} (100%)",
+            fabric_name=f"{fabric_color} (100%)",
             confidence=confidence_percent,
             email=data.get("email"),
             image=data.get("image", "")
         )
 
-        print(f"Prediction: {predicted_raw} / {predicted_label} ({confidence_percent}% confidence) | "
-              f"Fabric: {rec['fabric_color']} | Probs: {probabilities}")
+        print(f"Prediction successful (>=70%): {predicted_raw} / {predicted_label} ({confidence_percent}% confidence) | "
+              f"Fabric: {fabric_color} | Probs: {probabilities}")
 
         # Return authentic CNN model prediction with probability distribution, fabric-specific steps and caution
         return jsonify({
             "id":                   scan_id,
             "status":               "success",
+            "is_classified":        True,
             "stain_classification": predicted_raw,
             "fabric_material":      "Cotton",
-            "fabric_color":         rec["fabric_color"],
+            "fabric_color":         fabric_color,
             "confidence":           confidence_percent,
             "probabilities":        probabilities,
             "stain":                predicted_label,
-            "fabric":               f"{rec['fabric_color']} (100%)",
+            "fabric":               f"{fabric_color} (100%)",
             "steps":                rec["steps"],
             "caution":              rec["caution"],
             "materials":            rec["materials"],
             "recommendation": {
                 "id":           scan_id,
+                "status":       "success",
+                "is_classified": True,
                 "steps":        rec["steps"],
                 "caution":      rec["caution"],
                 "materials":    rec["materials"],
-                "fabric_color": rec["fabric_color"]
+                "fabric_color": fabric_color
             }
         })
 
