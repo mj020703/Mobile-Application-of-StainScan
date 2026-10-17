@@ -26,6 +26,13 @@ const CONFIG = {
             }
         } catch (_) {}
 
+        // If explicitly opened on port 5000 (local Flask server), automatically use local server
+        try {
+            if (typeof window !== "undefined" && window.location && (window.location.port === "5000" || (window.location.host && window.location.host.endsWith(":5000")))) {
+                return window.location.origin;
+            }
+        } catch (_) {}
+
         // Production default: always communicate directly with live Render server
         return LIVE_RENDER_BACKEND;
     })()
@@ -702,31 +709,6 @@ document.addEventListener("DOMContentLoaded", () => {
         }, 3000);
     }
 
-    // --- Dynamic Button Loading State ---
-    function setButtonLoading(button, isLoading, loadingText = "Signing in...") {
-        if (!button) return;
-        if (isLoading) {
-            if (!button.dataset.originalHtml) {
-                button.dataset.originalHtml = button.innerHTML;
-            }
-            button.disabled = true;
-            button.classList.add("btn-loading");
-            button.setAttribute("aria-busy", "true");
-            button.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>${loadingText}</span>`;
-        } else {
-            button.disabled = false;
-            button.classList.remove("btn-loading");
-            button.removeAttribute("aria-busy");
-            if (button.dataset.originalHtml) {
-                button.innerHTML = button.dataset.originalHtml;
-                if (typeof I18N !== "undefined" && typeof I18N.applyTranslations === "function") {
-                    I18N.applyTranslations();
-                }
-            }
-        }
-    }
-    window.setButtonLoading = setButtonLoading;
-
     // --- Clock Status bar ---
     function updateClock() {
         const now = new Date();
@@ -831,26 +813,15 @@ document.addEventListener("DOMContentLoaded", () => {
     // Login Form Submit (proceeds directly without repeating splash intro)
     document.getElementById("loginForm").addEventListener("submit", (e) => {
         e.preventDefault();
-        const submitBtn = document.getElementById("btnLoginSubmit") || document.querySelector("#loginForm button[type='submit']");
         const email = document.getElementById("login-email").value.trim().toLowerCase();
         const password = document.getElementById("login-password").value;
-
-        const loadingText = (typeof I18N !== "undefined" && typeof I18N.t === "function" && I18N.t("btn_signing_in") !== "btn_signing_in")
-            ? I18N.t("btn_signing_in")
-            : "Signing in...";
-        setButtonLoading(submitBtn, true, loadingText);
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
 
         fetch(DataStore.getApiUrl("/api/login"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, password }),
-            signal: controller.signal
+            body: JSON.stringify({ email, password })
         })
         .then(res => {
-            clearTimeout(timeoutId);
             const contentType = res.headers.get("content-type");
             if (!contentType || !contentType.includes("application/json")) {
                 throw new Error("Unable to connect to the backend service. Please check server connection.");
@@ -872,25 +843,13 @@ document.addEventListener("DOMContentLoaded", () => {
             document.getElementById("loginForm").reset();
         })
         .catch(err => {
-            clearTimeout(timeoutId);
-            let message = err.message || "Invalid email credentials or password.";
-            if (err.name === "AbortError" || err.name === "TimeoutError") {
-                message = "Server request timed out. Please check your connection and try again.";
-            } else if (err.name === "TypeError" && (err.message === "Failed to fetch" || err.message.includes("NetworkError"))) {
-                message = "Network error: Unable to connect to backend server. Please verify your connection.";
-            }
-            showToast(message, "error");
-        })
-        .finally(() => {
-            clearTimeout(timeoutId);
-            setButtonLoading(submitBtn, false);
+            showToast(err.message || "Invalid email credentials or password.", "error");
         });
     });
 
     // Registration Form Submit
     document.getElementById("registerForm").addEventListener("submit", (e) => {
         e.preventDefault();
-        const submitBtn = document.getElementById("btnRegisterSubmit") || document.querySelector("#registerForm button[type='submit']");
         const name = document.getElementById("reg-name").value.trim();
         const email = document.getElementById("reg-email").value.trim().toLowerCase();
         const password = document.getElementById("reg-password").value;
@@ -901,19 +860,12 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
-        setButtonLoading(submitBtn, true, "Creating Account...");
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
-
         fetch(DataStore.getApiUrl("/api/register"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name, email, password }),
-            signal: controller.signal
+            body: JSON.stringify({ name, email, password })
         })
         .then(res => {
-            clearTimeout(timeoutId);
             const contentType = res.headers.get("content-type");
             if (!contentType || !contentType.includes("application/json")) {
                 throw new Error("Unable to connect to the cloud service. Please verify that your backend server has been successfully redeployed on Render.");
@@ -929,18 +881,7 @@ document.addEventListener("DOMContentLoaded", () => {
             document.getElementById("btnGoLogin").click();
         })
         .catch(err => {
-            clearTimeout(timeoutId);
-            let message = err.message || "Registration failed.";
-            if (err.name === "AbortError" || err.name === "TimeoutError") {
-                message = "Server request timed out. Please check your connection and try again.";
-            } else if (err.name === "TypeError" && (err.message === "Failed to fetch" || err.message.includes("NetworkError"))) {
-                message = "Network error: Unable to connect to server. Please try again.";
-            }
-            showToast(message, "error");
-        })
-        .finally(() => {
-            clearTimeout(timeoutId);
-            setButtonLoading(submitBtn, false);
+            showToast(err.message || "Registration failed.", "error");
         });
     });
 

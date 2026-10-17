@@ -170,28 +170,6 @@ document.addEventListener("DOMContentLoaded", () => {
         }, 3000);
     }
 
-    // --- Dynamic Button Loading State ---
-    function setButtonLoading(button, isLoading, loadingText = "Signing in...") {
-        if (!button) return;
-        if (isLoading) {
-            if (!button.dataset.originalHtml) {
-                button.dataset.originalHtml = button.innerHTML;
-            }
-            button.disabled = true;
-            button.classList.add("btn-loading");
-            button.setAttribute("aria-busy", "true");
-            button.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>${loadingText}</span>`;
-        } else {
-            button.disabled = false;
-            button.classList.remove("btn-loading");
-            button.removeAttribute("aria-busy");
-            if (button.dataset.originalHtml) {
-                button.innerHTML = button.dataset.originalHtml;
-            }
-        }
-    }
-    window.setButtonLoading = setButtonLoading;
-
     // --- Tab Router Navigation ---
     function navigateToTab(tabId) {
         // Toggle Active Menu Button
@@ -236,27 +214,15 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- ADMIN AUTHENTICATION GATES ---
     document.getElementById("adminLoginForm").addEventListener("submit", (e) => {
         e.preventDefault();
-        const submitBtn = document.getElementById("btnAdminLoginSubmit") || document.querySelector("#adminLoginForm button[type='submit']");
         const email = document.getElementById("admin-email").value.trim().toLowerCase();
         const password = document.getElementById("admin-password").value;
-
-        setButtonLoading(submitBtn, true, "Signing in...");
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
 
         fetch(AdminDataStore.getApiUrl("/api/login"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, password }),
-            signal: controller.signal
+            body: JSON.stringify({ email, password })
         })
         .then(res => {
-            clearTimeout(timeoutId);
-            const contentType = res.headers.get("content-type");
-            if (!contentType || !contentType.includes("application/json")) {
-                throw new Error("Unable to connect to the backend service. Please check server connection.");
-            }
             if (!res.ok) {
                 return res.json().then(err => { throw new Error(err.error || "Login failed"); });
             }
@@ -281,18 +247,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         })
         .catch(err => {
-            clearTimeout(timeoutId);
-            let message = err.message || "Invalid credentials entered. Try again.";
-            if (err.name === "AbortError" || err.name === "TimeoutError") {
-                message = "Server request timed out. Please check your connection and try again.";
-            } else if (err.name === "TypeError" && (err.message === "Failed to fetch" || err.message.includes("NetworkError"))) {
-                message = "Network error: Unable to connect to backend server. Please verify your connection.";
-            }
-            showToast(message, "error");
-        })
-        .finally(() => {
-            clearTimeout(timeoutId);
-            setButtonLoading(submitBtn, false);
+            showToast(err.message || "Invalid credentials entered. Try again.", "error");
         });
     });
 
