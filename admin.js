@@ -377,11 +377,13 @@ document.addEventListener("DOMContentLoaded", () => {
                         else if (scan.stain === "Mud") stainColor = "#8b5cf6";
                     }
 
+                    const displayFabric = isUnidentified ? "Unidentified / N/A" : (scan.fabric || "Cotton (100%)");
+
                     tr.innerHTML = `
                         <td>${dateStr}</td>
                         <td><strong>${scan.email || "mobile_user"}</strong></td>
                         <td><span style="font-weight:600; color:${stainColor};">${displayStain}</span></td>
-                        <td>${scan.fabric || "Cotton (100%)"}</td>
+                        <td>${displayFabric}</td>
                         <td><strong>${confVal}%</strong></td>
                         <td>${statusBadge}</td>
                     `;

@@ -412,7 +412,11 @@ const I18N = {
         return stain;
     },
     tFabric(fabric) {
-        if (!fabric) return "";
+        if (!fabric) return "N/A";
+        const f = String(fabric).trim();
+        if (f === "N/A" || f.toLowerCase().includes("unidentified")) {
+            return this.currentLang === "hil" ? "Wala Makilal-an / N/A" : "Unidentified / N/A";
+        }
         if (this.currentLang !== "hil") return fabric;
         return fabric
             .replace("White Cotton", "Puti nga Bulak (White Cotton)")
@@ -532,8 +536,9 @@ class DataStore {
                 let scans = await res.json();
                 scans = scans.map(item => {
                     const conf = parseInt(item.confidence) || 0;
-                    if (conf < 70 && item.stain !== "Unidentified" && item.stain !== "Unidentified Stain") {
+                    if (conf < 70) {
                         item.stain = "Unidentified";
+                        item.fabric = "N/A";
                     }
                     return item;
                 });
@@ -591,9 +596,15 @@ class DataStore {
         let modified = false;
         const normalized = raw.map(item => {
             const conf = parseInt(item.confidence) || 0;
-            if (conf < 70 && item.stain !== "Unidentified" && item.stain !== "Unidentified Stain") {
-                item.stain = "Unidentified";
-                modified = true;
+            if (conf < 70) {
+                if (item.stain !== "Unidentified" && item.stain !== "Unidentified Stain") {
+                    item.stain = "Unidentified";
+                    modified = true;
+                }
+                if (item.fabric !== "N/A" && item.fabric !== "Unidentified / N/A") {
+                    item.fabric = "N/A";
+                    modified = true;
+                }
             }
             return item;
         });
@@ -929,8 +940,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const rawHistory = historyList || DataStore.getHistory();
         const history = rawHistory.map(item => {
             const conf = parseInt(item.confidence) || 0;
-            if (conf < 70 && item.stain !== "Unidentified" && item.stain !== "Unidentified Stain") {
+            if (conf < 70) {
                 item.stain = "Unidentified";
+                item.fabric = "N/A";
             }
             return item;
         });
@@ -966,6 +978,7 @@ document.addEventListener("DOMContentLoaded", () => {
             let classType = "unknown";
             let icon = "fa-triangle-exclamation";
             let displayTitle = I18N.currentLang === "hil" ? "Indi Masigurado nga Digo" : "Unidentified Stain";
+            let displayFabric = isUnidentified ? "N/A" : I18N.tFabric(item.fabric);
 
             if (!isUnidentified) {
                 if (item.stain === "Mud") { classType = "mud"; icon = "fa-mound"; }
@@ -983,7 +996,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     <div class="scan-item-badge ${classType}"><i class="fas ${icon}"></i></div>
                     <div class="scan-item-details">
                         <span class="scan-title">${displayTitle}</span>
-                        <span class="scan-meta">${formattedDate} • ${item.fabric}</span>
+                        <span class="scan-meta">${formattedDate} • ${displayFabric}</span>
                     </div>
                 </div>
                 <div class="scan-item-right">
@@ -1196,6 +1209,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         const confVal = parseInt(predictionResult.confidence) || 0;
                         const isClassified = predictionResult.is_classified !== false && confVal >= 70 && predictionResult.status !== "Unidentified";
                         let displayStain = "Unidentified Stain";
+                        let fabricMat = "Unidentified / N/A";
                         if (isClassified) {
                             if (rawStain.toLowerCase().includes("ballpen") || rawStain.toLowerCase().includes("ink")) {
                                 displayStain = "Black Ballpen Ink";
@@ -1206,8 +1220,8 @@ document.addEventListener("DOMContentLoaded", () => {
                             } else {
                                 displayStain = predictionResult.stain || rawStain;
                             }
+                            fabricMat = predictionResult.fabric || (predictionResult.fabric_color ? `${predictionResult.fabric_color} (100%)` : "Cotton Fabric (100%)");
                         }
-                        const fabricMat = predictionResult.fabric || (predictionResult.fabric_color ? `${predictionResult.fabric_color} (100%)` : "Cotton Fabric (100%)");
                         processScanningSuccess(displayStain, fabricMat, confVal, predictionResult);
                     } else {
                         const errMsg = (predictionResult && predictionResult.error) ? predictionResult.error : "Unknown backend error";
@@ -1275,6 +1289,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 ? "Indi Masigurado nga Pag-scan (<70%). Indi maathag o wala makilal-an ang litrato. Palihog mag-scan sang maathag, may maayo nga suga nga litrato sang digo sa bayo nga bulak."
                 : "Inconclusive Scan (<70%). Photo is ambiguous or not recognized. Please scan a clear, well-lit photo of a stained cotton garment.";
             const displayTitle = I18N.currentLang === "hil" ? "Indi Masigurado nga Digo" : "Unidentified Stain";
+            const displayFabric = I18N.currentLang === "hil" ? "Wala Makilal-an / N/A" : "Unidentified / N/A";
 
             resultsBadge.className = "results-badge inconclusive";
             resultsBadge.innerHTML = `<i class="fas fa-triangle-exclamation"></i> <span>${I18N.currentLang === "hil" ? "Indi Masigurado (<70%)" : "Inconclusive (<70%)"}</span>`;
@@ -1282,7 +1297,7 @@ document.addEventListener("DOMContentLoaded", () => {
             resultsBadge.style.color = "#eab308";
 
             resultStainType.textContent = displayTitle;
-            resultFabricType.textContent = I18N.tFabric(fabricColor.includes("100%") ? fabricColor : `${fabricColor} (100%)`);
+            resultFabricType.textContent = displayFabric;
             resultConfidence.textContent = `${confNum}%`;
             resultConfidenceBar.style.width = `${confNum}%`;
             resultConfidenceBar.className = "confidence-bar warning";
@@ -1304,8 +1319,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 id: serverAssignedId || ("h_" + Date.now()),
                 email: currentUser ? currentUser.email : "guest@stainscan.com",
                 stain: "Unidentified",
-                fabric: fabricColor.includes("100%") ? fabricColor : `${fabricColor} (100%)`,
-                fabric_color: fabricColor,
+                fabric: "N/A",
+                fabric_color: "N/A",
+                fabric_type: "Unidentified / N/A",
                 confidence: confNum,
                 probabilities: (recommendation && recommendation.probabilities) ? recommendation.probabilities : null,
                 steps: [],
@@ -1474,7 +1490,15 @@ document.addEventListener("DOMContentLoaded", () => {
     let activeFilter = "all";
 
     function renderHistory(historyList) {
-        const history = historyList || JSON.parse(localStorage.getItem(`stainscan_history_${currentUser.email}`)) || [];
+        const rawHistory = historyList || JSON.parse(localStorage.getItem(`stainscan_history_${currentUser.email}`)) || [];
+        const history = rawHistory.map(item => {
+            const conf = parseInt(item.confidence) || 0;
+            if (conf < 70) {
+                item.stain = "Unidentified";
+                item.fabric = "N/A";
+            }
+            return item;
+        });
         const searchQuery = historySearch.value.trim().toLowerCase();
 
         historyListContainer.innerHTML = "";
@@ -1505,6 +1529,7 @@ document.addEventListener("DOMContentLoaded", () => {
             let classType = "unknown";
             let icon = "fa-triangle-exclamation";
             let displayTitle = I18N.currentLang === "hil" ? "Indi Masigurado nga Digo" : "Unidentified Stain";
+            let displayFabric = isUnidentified ? "N/A" : I18N.tFabric(item.fabric);
 
             if (!isUnidentified) {
                 if (item.stain === "Mud") { classType = "mud"; icon = "fa-mound"; }
@@ -1522,7 +1547,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     <div class="scan-item-badge ${classType}"><i class="fas ${icon}"></i></div>
                     <div class="scan-item-details">
                         <span class="scan-title">${displayTitle}</span>
-                        <span class="scan-meta">${formattedDate} • ${item.fabric}</span>
+                        <span class="scan-meta">${formattedDate} • ${displayFabric}</span>
                     </div>
                 </div>
                 <div class="scan-item-right">

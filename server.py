@@ -489,9 +489,10 @@ def increment_scan_count(stain_name=None, fabric_name=None, confidence=None, ema
     metrics["total_scans"] = metrics.get("total_scans", 0) + 1
 
     conf_num = int(confidence or 0)
-    # Strictly enforce 70% confidence threshold: override stain to Unidentified if below 70%
+    # Strictly enforce 70% confidence threshold: override stain to Unidentified and fabric to Unidentified / N/A if below 70%
     if conf_num < 70:
         stain_name = "Unidentified"
+        fabric_name = "Unidentified / N/A"
 
     if stain_name and stain_name != "Unidentified":
         stain_counts = metrics.setdefault("stain_counts", {})
@@ -505,7 +506,7 @@ def increment_scan_count(stain_name=None, fabric_name=None, confidence=None, ema
         "id": scan_id,
         "email": email or "mobile_user@stainscan.com",
         "stain": stain_name or "Unidentified",
-        "fabric": fabric_name or "Cotton Fabric (100%)",
+        "fabric": fabric_name or ("Unidentified / N/A" if conf_num < 70 else "Cotton Fabric (100%)"),
         "confidence": conf_num,
         "timestamp": datetime.utcnow().isoformat(),
         "status": "Pending",
@@ -654,6 +655,7 @@ def add_scan(scan):
         try:
             if int(conf_val) < 70:
                 scan["stain"] = "Unidentified"
+                scan["fabric"] = "Unidentified / N/A"
         except (ValueError, TypeError):
             pass
 
@@ -808,11 +810,12 @@ def api_scans():
             
         conf_num = int(data["confidence"])
         stain_name = "Unidentified" if conf_num < 70 else data["stain"]
+        fabric_name = "Unidentified / N/A" if conf_num < 70 else data["fabric"]
         new_scan = {
             "id": data.get("id", ""),
             "email": data["email"].strip().lower(),
             "stain": stain_name,
-            "fabric": data["fabric"],
+            "fabric": fabric_name,
             "confidence": conf_num,
             "timestamp": data.get("timestamp", datetime.utcnow().isoformat()),
             "status": data.get("status", "Pending"),
@@ -888,7 +891,7 @@ def api_save_treatment_scan():
     scan_id = data.get("scan_id") or data.get("id") or ("h_" + datetime.utcnow().strftime("%Y%m%d%H%M%S"))
     confidence = int(data.get("confidence") or 90)
     stain = "Unidentified" if confidence < 70 else (data.get("stain") or "Used Cooking Oil")
-    fabric = data.get("fabric") or data.get("fabric_color") or "Cotton Fabric (100%)"
+    fabric = "Unidentified / N/A" if confidence < 70 else (data.get("fabric") or data.get("fabric_color") or "Cotton Fabric (100%)")
     status = data.get("status") or data.get("treatment_status") or "Treated"
     timestamp = data.get("timestamp") or datetime.utcnow().isoformat()
     image = data.get("image") or ""
@@ -1302,25 +1305,26 @@ def predict():
 
             metrics, scan_id = increment_scan_count(
                 stain_name="Unidentified",
-                fabric_name=f"{fabric_color} (100%)",
+                fabric_name="Unidentified / N/A",
                 confidence=confidence_percent,
                 email=data.get("email"),
                 image=data.get("image", "")
             )
 
-            print(f"Prediction below 70% threshold ({confidence_percent}%): {predicted_raw} -> Unidentified Stain | Probs: {probabilities}")
+            print(f"Prediction below 70% threshold ({confidence_percent}%): {predicted_raw} -> Unidentified Stain | Fabric: Unidentified / N/A | Probs: {probabilities}")
 
             return jsonify({
                 "id":                   scan_id,
                 "status":               "Unidentified",
                 "is_classified":        False,
                 "stain_classification": "Unidentified",
-                "fabric_material":      "Cotton",
-                "fabric_color":         fabric_color,
+                "fabric_material":      "Unidentified / N/A",
+                "fabric_color":         "N/A",
+                "fabric_type":          "Unidentified / N/A",
                 "confidence":           confidence_percent,
                 "probabilities":        probabilities,
                 "stain":                unidentified_title,
-                "fabric":               f"{fabric_color} (100%)",
+                "fabric":               "Unidentified / N/A",
                 "steps":                [],
                 "caution":              caution_message,
                 "materials":            [],
@@ -1331,7 +1335,8 @@ def predict():
                     "steps":         [],
                     "caution":       caution_message,
                     "materials":     [],
-                    "fabric_color":  fabric_color
+                    "fabric_color":  "N/A",
+                    "fabric_type":   "Unidentified / N/A"
                 }
             })
 
