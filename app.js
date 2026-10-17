@@ -975,7 +975,8 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             const formattedDate = new Date(item.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-            const statusClass = item.status.toLowerCase();
+            const statusText = item.status || "Pending";
+            const statusClass = statusText.toLowerCase();
 
             itemEl.innerHTML = `
                 <div class="scan-item-left">
@@ -987,7 +988,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 </div>
                 <div class="scan-item-right">
                     <span class="scan-conf">${confVal}% AI</span>
-                    <span class="scan-status-tag ${statusClass}">${item.status}</span>
+                    <span class="scan-status-tag ${statusClass}">${statusText}</span>
                 </div>
             `;
 
@@ -1513,7 +1514,8 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             const formattedDate = new Date(item.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-            const statusClass = item.status.toLowerCase();
+            const statusText = item.status || "Pending";
+            const statusClass = statusText.toLowerCase();
 
             itemEl.innerHTML = `
                 <div class="scan-item-left">
@@ -1525,7 +1527,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 </div>
                 <div class="scan-item-right">
                     <span class="scan-conf">${confVal}% AI</span>
-                    <span class="scan-status-tag ${statusClass}">${item.status}</span>
+                    <span class="scan-status-tag ${statusClass}">${statusText}</span>
                 </div>
             `;
 
