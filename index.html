@@ -230,36 +230,6 @@
                             </div>
                         </div>
 
-                        <!-- Quick Test Samples Selector -->
-                        <div class="quick-samples-card" id="quickSamplesCard">
-                            <div class="quick-samples-header">
-                                <span class="quick-samples-title">
-                                    <i class="fas fa-flask-vial"></i>
-                                    <span data-i18n="quick_samples_title">Quick Test Samples</span>
-                                </span>
-                                <span class="quick-samples-subtitle" data-i18n="quick_samples_subtitle">Tap to test real dataset stains with 1-tap</span>
-                            </div>
-                            <div class="quick-samples-chips">
-                                <button type="button" class="btn-sample-chip" data-sample="ink_white" title="Ballpen Ink on White Cotton">
-                                    <i class="fas fa-pen-nib"></i> <span>Ballpen Ink</span>
-                                </button>
-                                <button type="button" class="btn-sample-chip" data-sample="oil_white" title="Used Cooking Oil on White Cotton">
-                                    <i class="fas fa-oil-can"></i> <span>Cooking Oil</span>
-                                </button>
-                                <button type="button" class="btn-sample-chip" data-sample="mud_white" title="Mud Stain on White Cotton">
-                                    <i class="fas fa-mountain"></i> <span>Mud Stain</span>
-                                </button>
-                                <button type="button" class="btn-sample-chip chip-grey" data-sample="ink_grey" title="Ballpen Ink on Grey Cotton">
-                                    <i class="fas fa-feather"></i> <span>Grey Ink</span>
-                                </button>
-                                <button type="button" class="btn-sample-chip chip-grey" data-sample="oil_grey" title="Used Cooking Oil on Grey Cotton">
-                                    <i class="fas fa-droplet"></i> <span>Grey Oil</span>
-                                </button>
-                                <button type="button" class="btn-sample-chip chip-grey" data-sample="mud_grey" title="Mud on Grey Cotton">
-                                    <i class="fas fa-cloud-rain"></i> <span>Grey Mud</span>
-                                </button>
-                            </div>
-                        </div>
 
                         <!-- Analysis Action / Controls -->
                         <div class="scan-controls" id="scanControls" style="display: none;">
@@ -446,55 +416,6 @@
             </nav>
         </div>
 
-        <!-- Float Simulation Control Panel -->
-        <div class="simulation-panel" id="simulationPanel">
-            <div class="sim-header">
-                <h3><i class="fas fa-gear"></i> CNN Prototype Controller</h3>
-                <button class="btn-toggle-sim" id="btnToggleSim" title="Minimize Panel"><i class="fas fa-minus"></i></button>
-            </div>
-            <div class="sim-body" id="simBody">
-                <p class="sim-desc">Use this to simulate scanning different stains and configure custom AI output results.</p>
-                <div class="form-group">
-                    <label for="sim-stain">Simulated Stain Classification</label>
-                    <select id="sim-stain" class="form-select">
-                        <option value="live" selected>Live trained CNN Model</option>
-                        <option value="Used Cooking Oil">Used Cooking Oil</option>
-                        <option value="Black Ballpen Ink">Black Ballpoint Pen Ink</option>
-                        <option value="Mud">Mud</option>
-                        <option value="Unknown Stain">Unknown/Unsupported Stain</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="sim-fabric">Simulated Fabric Classification</label>
-                    <select id="sim-fabric" class="form-select">
-                        <option value="Cotton Fabric (100%)" selected>Cotton Fabric (100%)</option>
-                        <option value="Polyester Mix">Polyester Mix (Unsupported)</option>
-                        <option value="Silk Fabric">Silk Fabric (Unsupported)</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="sim-confidence">Simulated Confidence Score (%)</label>
-                    <input type="number" id="sim-confidence" class="form-input" min="30" max="100" value="86">
-                </div>
-                <div class="form-group">
-                    <label for="sim-error-trigger">Simulate Scan Failures</label>
-                    <select id="sim-error-trigger" class="form-select">
-                        <option value="none">No Error (Successful Scan)</option>
-                        <option value="low_light">Low Light Alert (Try again)</option>
-                        <option value="blurry">Blurry Image Alert (Try again)</option>
-                        <option value="network_error">Backend CNN Timeout</option>
-                    </select>
-                </div>
-                <div class="sim-info-badge">
-                    <i class="fas fa-circle-info"></i>
-                    <span>Configure values here before clicking "Begin Intelligent CNN Analysis" in the Scan tab.</span>
-                </div>
-                <button type="button" class="btn btn-secondary btn-block" id="btnClearStorage" style="margin-top: 10px; background-color: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.2); color: #ef4444;">
-                    <i class="far fa-trash-can"></i>
-                    <span>Reset Browser Storage</span>
-                </button>
-            </div>
-        </div>
 
         <!-- Recommendations Detailed Checklist Modal -->
         <div class="guide-modal-overlay interactive-checklist-modal modal" id="guideModal" style="display: none;">

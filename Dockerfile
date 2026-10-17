@@ -27,7 +27,6 @@ COPY admin.html .
 COPY admin.js .
 COPY index.html .
 COPY app.js .
-COPY sample_data_urls.js .
 COPY style.css .
 COPY stainscan_logo.png .
 COPY stainscan_model_v3_balanced.keras .

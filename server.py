@@ -1243,48 +1243,19 @@ def predict():
         image_bytes = base64.b64decode(base64_str)
         image = Image.open(BytesIO(image_bytes)).convert("RGB")
 
-        # Demo/fallback mode when model is unavailable
+        # Ensure model is ready; never return fake mock predictions
         if model is None:
-            print("Server running in Demo/Simulation Fallback mode.")
-            img_w, img_h = image.size
-            pseudo_seed = (img_w + img_h) % 3
-            stains = ["Black Ballpen Ink", "Used Cooking Oil", "Mud"]
-            raw_stains = ["ballpen ink_cotton", "Cooking Oil_cotton", "Mud_cotton"]
-            confidences = [89, 92, 85]
-            predicted_raw = raw_stains[pseudo_seed]
-            predicted_label = stains[pseudo_seed]
-            confidence_percent = confidences[pseudo_seed]
+            load_model()
+            if model is None:
+                err_detail = LAST_MODEL_ERROR or "CNN model weights file not loaded on server."
+                print(f"Prediction requested but model is unavailable: {err_detail}")
+                return jsonify({
+                    "error": "CNN model unavailable on server. Please ensure the model file is deployed.",
+                    "status": "error",
+                    "details": err_detail
+                }), 503
 
-            rec = get_recommendation(predicted_label, fabric_context, image=image)
-            metrics, scan_id = increment_scan_count(
-                stain_name=predicted_label,
-                fabric_name=f"{rec['fabric_color']} (100%)",
-                confidence=confidence_percent,
-                email=data.get("email"),
-                image=data.get("image", "")
-            )
-            return jsonify({
-                "id":                   scan_id,
-                "stain_classification": predicted_raw,
-                "fabric_material":      "Cotton",
-                "fabric_color":         rec["fabric_color"],
-                "confidence":           confidence_percent,
-                "stain":                predicted_label,
-                "fabric":               f"{rec['fabric_color']} (100%)",
-                "steps":                rec["steps"],
-                "caution":              rec["caution"],
-                "materials":            rec["materials"],
-                "recommendation": {
-                    "id": scan_id,
-                    "steps": rec["steps"],
-                    "caution": rec["caution"],
-                    "materials": rec["materials"],
-                    "fabric_color": rec["fabric_color"]
-                },
-                "message":              "Demo prediction (model file not found)"
-            })
-
-        # Preprocess and run TensorFlow inference
+        # Preprocess uploaded camera/gallery image and run real TensorFlow CNN inference
         input_arr   = preprocess_image(image)              # (1, 224, 224, 3)
         predictions = model.predict(input_arr, verbose=0)  # (1, 3) softmax probabilities
         probs       = predictions[0]                        # (3,)
@@ -1293,54 +1264,15 @@ def predict():
         predicted_raw    = CLASS_MAPPING_RAW.get(predicted_idx, "Unknown")
         predicted_label  = CLASS_MAPPING_DISPLAY.get(predicted_idx, predicted_raw)
 
+        # Build authentic probability distribution across all 3 trained classes
+        probabilities = {
+            "Black Ballpen Ink": round(float(probs[0]) * 100, 2),
+            "Used Cooking Oil":  round(float(probs[1]) * 100, 2),
+            "Mud":               round(float(probs[2]) * 100, 2)
+        }
+
         # Retrieve dynamic recommendation based on stain and fabric context
         rec = get_recommendation(predicted_label, fabric_context, image=image)
-
-        # Check central crop luminance to detect extreme underexposure
-        w, h = image.size
-        crop_box = (int(w * 0.15), int(h * 0.15), int(w * 0.85), int(h * 0.85))
-        cropped = image.crop(crop_box).convert("L")
-        crop_arr = np.array(cropped)
-        mean_lum = float(np.mean(crop_arr))
-
-        is_low_light = mean_lum < 25
-        is_inconclusive = (confidence_percent < 75) or is_low_light
-
-        if is_inconclusive:
-            caution_msg = (
-                "Low light alert: Image is severely underexposed. Please photograph under bright, even lighting."
-                if is_low_light else
-                f"Low confidence ({confidence_percent}%). Stain features are ambiguous or not recognized (<75%). Ensure the photo is a clear, well-lit close-up of a stained cotton garment (Ballpen Ink, Cooking Oil, or Mud)."
-            )
-            metrics, scan_id = increment_scan_count(
-                stain_name="Inconclusive",
-                fabric_name=f"{rec['fabric_color']} (100%)",
-                confidence=confidence_percent,
-                email=data.get("email"),
-                image=data.get("image", "")
-            )
-            print(f"Inconclusive Scan: {confidence_percent}% confidence | Mean Lum: {mean_lum:.1f}")
-            return jsonify({
-                "id":                   scan_id,
-                "status":               "inconclusive",
-                "stain_classification": "Inconclusive Stain",
-                "fabric_material":      "Cotton",
-                "fabric_color":         rec["fabric_color"],
-                "confidence":           confidence_percent,
-                "stain":                "Inconclusive Stain",
-                "fabric":               f"{rec['fabric_color']} (100%)",
-                "steps":                [],
-                "caution":              caution_msg,
-                "materials":            [],
-                "recommendation": {
-                    "id": scan_id,
-                    "steps": [],
-                    "caution": caution_msg,
-                    "materials": [],
-                    "fabric_color": rec["fabric_color"]
-                },
-                "message": caution_msg
-            })
 
         metrics, scan_id = increment_scan_count(
             stain_name=predicted_label,
@@ -1351,9 +1283,9 @@ def predict():
         )
 
         print(f"Prediction: {predicted_raw} / {predicted_label} ({confidence_percent}% confidence) | "
-              f"Fabric: {rec['fabric_color']} | Probs: {[round(float(p)*100,1) for p in probs]}")
+              f"Fabric: {rec['fabric_color']} | Probs: {probabilities}")
 
-        # Return actual model prediction with fabric-specific steps and caution
+        # Return authentic CNN model prediction with probability distribution, fabric-specific steps and caution
         return jsonify({
             "id":                   scan_id,
             "status":               "success",
@@ -1361,16 +1293,17 @@ def predict():
             "fabric_material":      "Cotton",
             "fabric_color":         rec["fabric_color"],
             "confidence":           confidence_percent,
+            "probabilities":        probabilities,
             "stain":                predicted_label,
             "fabric":               f"{rec['fabric_color']} (100%)",
             "steps":                rec["steps"],
             "caution":              rec["caution"],
             "materials":            rec["materials"],
             "recommendation": {
-                "id": scan_id,
-                "steps": rec["steps"],
-                "caution": rec["caution"],
-                "materials": rec["materials"],
+                "id":           scan_id,
+                "steps":        rec["steps"],
+                "caution":      rec["caution"],
+                "materials":    rec["materials"],
                 "fabric_color": rec["fabric_color"]
             }
         })
