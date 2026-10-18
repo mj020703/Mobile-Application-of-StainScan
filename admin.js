@@ -8,34 +8,9 @@ const LIVE_RENDER_BACKEND = "https://stainscan-backend-gmbw.onrender.com";
 
 const CONFIG = {
     // Production cloud backend (Render + MongoDB Atlas) where the mobile APK writes scans and treatments.
-    // By default, the admin portal always connects to the live cloud deployment so that scans
+    // By default, the admin portal always connects directly to the live cloud deployment so that scans
     // from mobile APK users across any network (cellular data or separate Wi-Fi) appear immediately.
-    API_BASE_URL: (() => {
-        if (typeof window === "undefined") return LIVE_RENDER_BACKEND;
-
-        const origin = window.location.origin || "";
-
-        // 1. Allow explicit developer override (?backend=local or ?local=1)
-        try {
-            const params = new URLSearchParams(window.location.search);
-            if (params.get("backend") === "local" || params.get("local") === "1") {
-                return (origin && !origin.startsWith("file:") && origin !== "null") ? origin : "http://localhost:5000";
-            }
-            const explicitBackend = params.get("backend");
-            if (explicitBackend && explicitBackend.startsWith("http")) {
-                return explicitBackend.replace(/\/+$/, "");
-            }
-        } catch (_) {}
-
-        // 2. When hosted on Render, use same origin
-        if (origin && origin.includes("onrender.com")) {
-            return origin;
-        }
-
-        // Default to live cloud backend (Render + MongoDB Atlas) so opening admin.html locally
-        // immediately reflects scans, treatments, and metrics coming from mobile APK users in real time.
-        return LIVE_RENDER_BACKEND;
-    })()
+    API_BASE_URL: LIVE_RENDER_BACKEND
 };
 
 class AdminDataStore {
@@ -214,8 +189,25 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- ADMIN AUTHENTICATION GATES ---
     document.getElementById("adminLoginForm").addEventListener("submit", (e) => {
         e.preventDefault();
+        const submitBtn = document.getElementById("btnAdminLoginSubmit") || e.target.querySelector("button[type='submit']");
         const email = document.getElementById("admin-email").value.trim().toLowerCase();
         const password = document.getElementById("admin-password").value;
+
+        // Activate smooth loading state and disable button to prevent multiple submissions
+        const originalHtml = submitBtn ? submitBtn.innerHTML : null;
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.classList.add("loading");
+            submitBtn.innerHTML = `<i class="fas fa-circle-notch fa-spin btn-spinner"></i> <span>Authenticating...</span>`;
+        }
+
+        const restoreBtn = () => {
+            if (submitBtn && originalHtml) {
+                submitBtn.disabled = false;
+                submitBtn.classList.remove("loading");
+                submitBtn.innerHTML = originalHtml;
+            }
+        };
 
         fetch(AdminDataStore.getApiUrl("/api/login"), {
             method: "POST",
@@ -242,12 +234,15 @@ document.addEventListener("DOMContentLoaded", () => {
                 showToast(`Access granted. Welcome, ${matched.name}!`);
                 renderOverview();
                 document.getElementById("adminLoginForm").reset();
+                restoreBtn();
             } else {
                 showToast("Access Denied. Account does not possess System Admin role.", "error");
+                restoreBtn();
             }
         })
         .catch(err => {
             showToast(err.message || "Invalid credentials entered. Try again.", "error");
+            restoreBtn();
         });
     });
 

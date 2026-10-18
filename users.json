@@ -26,5 +26,12 @@
     "password": "password123",
     "role": "user",
     "avatar": "Test User"
+  },
+  {
+    "name": "Test User",
+    "email": "testuser@gmail.com",
+    "password": "user123",
+    "role": "user",
+    "avatar": "Test User"
   }
 ]

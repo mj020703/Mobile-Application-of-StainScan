@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#070a13">
     <title>StainScan Mobile App</title>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -11,7 +15,7 @@
     <!-- Font Awesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="style.css?v=3.3">
+    <link rel="stylesheet" href="style.css?v=3.7">
 </head>
 <body>
     <!-- Main App Container mimicking a mobile screen layout on desktop -->
@@ -66,7 +70,7 @@
                                 <div class="auth-actions">
                                     <button type="button" class="text-link" id="btnGoForgot" data-i18n="link_forgot_password">Forgot Password?</button>
                                 </div>
-                                <button type="submit" class="btn btn-primary btn-block">
+                                <button type="submit" class="btn btn-primary btn-block" id="btnLoginSubmit">
                                     <span data-i18n="btn_sign_in">Sign In</span>
                                     <i class="fas fa-arrow-right"></i>
                                 </button>
@@ -212,7 +216,7 @@
 
                         <!-- Image Upload Area -->
                         <div class="upload-area" id="dropArea">
-                            <input type="file" id="fileInput" accept="image/*" class="file-hidden-input">
+                            <input type="file" id="fileInput" accept="image/jpeg,image/png" class="file-hidden-input">
                             <div class="upload-empty-state" id="uploadEmptyState">
                                 <div class="upload-icon-pulse">
                                     <i class="fas fa-cloud-arrow-up"></i>

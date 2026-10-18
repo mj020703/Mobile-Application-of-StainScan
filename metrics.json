@@ -1,16 +1,16 @@
 {
-  "total_scans": 16,
-  "total_cnn_scans_run": 15,
-  "totalScansCount": 15,
-  "successful_treatments": 6,
-  "totalTreatedCount": 6,
+  "total_scans": 45,
+  "total_cnn_scans_run": 44,
+  "totalScansCount": 44,
+  "successful_treatments": 7,
+  "totalTreatedCount": 7,
   "total_users": 3,
   "registered_mobile_users": 3,
   "totalUsersCount": 3,
   "stain_counts": {
-    "Used Cooking Oil": 5,
-    "Black Ballpen Ink": 2,
-    "Mud": 3
+    "Used Cooking Oil": 11,
+    "Black Ballpen Ink": 7,
+    "Mud": 11
   },
   "status": "ok"
 }

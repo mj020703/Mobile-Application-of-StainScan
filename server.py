@@ -4,7 +4,7 @@ import json
 import os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 from datetime import datetime
-from PIL import Image
+from PIL import Image, ImageOps
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
@@ -649,11 +649,11 @@ def get_scans(email=None):
     return execute_db_operation(_op, fallback_fn=_fb)
 
 def add_scan(scan):
-    # Enforce 70% confidence persistence check
+    # Enforce 75% confidence persistence check
     conf_val = scan.get("confidence")
     if conf_val is not None:
         try:
-            if int(conf_val) < 70:
+            if int(conf_val) < 75 or scan.get("stain") in ["Unidentified", "Unidentified Stain", "Unknown"]:
                 scan["stain"] = "Unidentified"
                 scan["fabric"] = "Unidentified / N/A"
         except (ValueError, TypeError):
@@ -1047,13 +1047,25 @@ def apply_clahe(img_rgb: np.ndarray, clip_limit: float = 2.0) -> np.ndarray:
 def preprocess_image(pil_image: Image.Image) -> np.ndarray:
     """
     Preprocess a PIL image to match the MobileNetV2 transfer learning pipeline:
-      1. Convert to RGB color space
-      2. Resize to IMAGE_SIZE (224x224) using Bilinear interpolation
-      3. Apply CIELAB CLAHE dynamic contrast equalization
-      4. Apply MobileNetV2 preprocess_input to scale pixel values to [-1.0, 1.0]
-      5. Expand batch dimension -> shape (1, 224, 224, 3)
+      1. Correct EXIF orientation (for mobile camera/gallery photos)
+      2. Convert to RGB color space
+      3. Resize to target input shape (224x224) using Bilinear interpolation
+      4. Apply CIELAB CLAHE dynamic contrast equalization
+      5. Apply MobileNetV2 preprocess_input to scale pixel values to [-1.0, 1.0]
+      6. Expand batch dimension -> shape (1, 224, 224, 3)
     """
-    img = pil_image.convert("RGB").resize(IMAGE_SIZE, Image.BILINEAR)
+    try:
+        pil_image = ImageOps.exif_transpose(pil_image)
+    except Exception:
+        pass
+
+    target_size = IMAGE_SIZE
+    if model is not None and hasattr(model, "input_shape") and model.input_shape:
+        shape = model.input_shape
+        if len(shape) == 4 and shape[1] is not None and shape[2] is not None:
+            target_size = (int(shape[1]), int(shape[2]))
+
+    img = pil_image.convert("RGB").resize(target_size, Image.BILINEAR)
     arr = np.array(img, dtype=np.uint8)
     enhanced = apply_clahe(arr)
     if HAS_TF:
@@ -1263,7 +1275,11 @@ def predict():
 
     try:
         image_bytes = base64.b64decode(base64_str)
-        image = Image.open(BytesIO(image_bytes)).convert("RGB")
+        raw_image = Image.open(BytesIO(image_bytes))
+        try:
+            image = ImageOps.exif_transpose(raw_image).convert("RGB")
+        except Exception:
+            image = raw_image.convert("RGB")
 
         # Ensure model is ready; never return fake mock predictions
         if model is None:
@@ -1277,15 +1293,39 @@ def predict():
                     "details": err_detail
                 }), 503
 
-        # Preprocess uploaded camera/gallery image and run real TensorFlow CNN inference
+        # 1. Image Quality & Out-of-Distribution Plausibility Checks
+        # Prevent CLAHE contrast equalization from inflating flat/uniform sensor noise into artificial "Mud"
+        arr_raw = np.array(image.resize((224, 224), Image.BILINEAR), dtype=np.uint8)
+        gray_raw = arr_raw.mean(axis=2)
+        contrast_std = float(np.std(gray_raw))
+
+        # Check HSV color saturation to reject vivid non-fabric objects (e.g., Persian rugs, neon objects)
+        try:
+            import cv2
+            hsv = cv2.cvtColor(arr_raw, cv2.COLOR_RGB2HSV)
+            mean_sat = float(np.mean(hsv[:, :, 1]))
+        except Exception:
+            mean_sat = 0.0
+
+        is_flat_surface = (contrast_std < 4.0)
+        is_vivid_non_fabric = (mean_sat > 75.0)
+
+        # 2. Preprocess uploaded camera/gallery image and run real TensorFlow CNN inference
         input_arr   = preprocess_image(image)              # (1, 224, 224, 3)
         predictions = model.predict(input_arr, verbose=0)  # (1, 3) softmax probabilities
         probs       = predictions[0]                        # (3,)
-        predicted_idx    = int(np.argmax(probs))
-        max_confidence   = float(probs[predicted_idx])
+        
+        # Sort predictions to evaluate top-1 vs top-2 class probabilities
+        order              = np.argsort(probs)[::-1]
+        top1_idx           = int(order[0])
+        top2_idx           = int(order[1])
+        max_confidence     = float(probs[top1_idx])
+        top2_confidence    = float(probs[top2_idx])
+        margin             = max_confidence - top2_confidence
         confidence_percent = int(round(max_confidence * 100))
-        predicted_raw    = CLASS_MAPPING_RAW.get(predicted_idx, "Unknown")
-        predicted_label  = CLASS_MAPPING_DISPLAY.get(predicted_idx, predicted_raw)
+        margin_percent     = round(margin * 100, 2)
+        predicted_raw      = CLASS_MAPPING_RAW.get(top1_idx, "Unknown")
+        predicted_label    = CLASS_MAPPING_DISPLAY.get(top1_idx, predicted_raw)
 
         # Build authentic probability distribution across all 3 trained classes
         probabilities = {
@@ -1298,10 +1338,24 @@ def predict():
         rec = get_recommendation(predicted_label, fabric_context, image=image)
         fabric_color = rec.get("fabric_color", "White Cotton")
 
-        # STRICT 70% CONFIDENCE THRESHOLD CHECK
-        if max_confidence < 0.70 or confidence_percent < 70:
+        # ROBUST CONFIDENCE THRESHOLD & MARGIN / OUT-OF-DISTRIBUTION VALIDATION CHECK
+        CONFIDENCE_THRESHOLD = 0.75  # 75% safe confidence threshold
+        MARGIN_THRESHOLD     = 0.25  # 25% minimum separation between top-1 and top-2 classes
+
+        is_low_confidence = (max_confidence < CONFIDENCE_THRESHOLD or confidence_percent < 75)
+        is_narrow_margin  = (margin < MARGIN_THRESHOLD)
+        is_unidentified   = is_low_confidence or is_narrow_margin or is_flat_surface or is_vivid_non_fabric
+
+        if is_unidentified:
             unidentified_title = "Unidentified Stain"
-            caution_message = "Inconclusive Scan (<70%). Photo is ambiguous or not recognized. Please scan a clear, well-lit photo of a stained cotton garment."
+            if is_flat_surface:
+                caution_message = "No visible stain pattern detected. Garment surface appears clean or uniform."
+            elif is_vivid_non_fabric:
+                caution_message = "Pattern or color distribution not recognized as white or grey cotton fabric."
+            elif is_narrow_margin:
+                caution_message = f"Ambiguous Scan. Model uncertainty between stain types (narrow separation of {round(margin*100, 1)}%). Please capture a clearer, centered photo."
+            else:
+                caution_message = f"Inconclusive Scan (<75%). Prediction confidence ({confidence_percent}%) is below the safety threshold. Please scan a clear, well-lit photo of a stained cotton garment."
 
             metrics, scan_id = increment_scan_count(
                 stain_name="Unidentified",
@@ -1311,7 +1365,7 @@ def predict():
                 image=data.get("image", "")
             )
 
-            print(f"Prediction below 70% threshold ({confidence_percent}%): {predicted_raw} -> Unidentified Stain | Fabric: Unidentified / N/A | Probs: {probabilities}")
+            print(f"Prediction overridden to Unidentified: conf={confidence_percent}%, margin={margin_percent}%, flat={is_flat_surface}, vivid={is_vivid_non_fabric} | Probs: {probabilities}")
 
             return jsonify({
                 "id":                   scan_id,
@@ -1322,6 +1376,7 @@ def predict():
                 "fabric_color":         "N/A",
                 "fabric_type":          "Unidentified / N/A",
                 "confidence":           confidence_percent,
+                "margin":               margin_percent,
                 "probabilities":        probabilities,
                 "stain":                unidentified_title,
                 "fabric":               "Unidentified / N/A",
@@ -1340,7 +1395,7 @@ def predict():
                 }
             })
 
-        # Confident classification (>= 70%)
+        # Confident classification (>= 75% confidence, >= 25% margin, genuine stained fabric)
         metrics, scan_id = increment_scan_count(
             stain_name=predicted_label,
             fabric_name=f"{fabric_color} (100%)",
@@ -1349,7 +1404,7 @@ def predict():
             image=data.get("image", "")
         )
 
-        print(f"Prediction successful (>=70%): {predicted_raw} / {predicted_label} ({confidence_percent}% confidence) | "
+        print(f"Prediction successful (>=75%, margin={margin_percent}%): {predicted_raw} / {predicted_label} ({confidence_percent}% confidence) | "
               f"Fabric: {fabric_color} | Probs: {probabilities}")
 
         # Return authentic CNN model prediction with probability distribution, fabric-specific steps and caution
@@ -1361,6 +1416,7 @@ def predict():
             "fabric_material":      "Cotton",
             "fabric_color":         fabric_color,
             "confidence":           confidence_percent,
+            "margin":               margin_percent,
             "probabilities":        probabilities,
             "stain":                predicted_label,
             "fabric":               f"{fabric_color} (100%)",

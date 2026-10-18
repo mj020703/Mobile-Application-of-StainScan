@@ -52,6 +52,13 @@
     -webkit-tap-highlight-color: transparent;
 }
 
+html, body {
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden;
+    touch-action: manipulation;
+}
+
 body {
     background-color: var(--bg-main);
     color: var(--text-primary);
@@ -219,6 +226,15 @@ body {
 
 .app-header {
     display: none !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+}
+
+.phone-screen,
+.app-container {
+    width: 100%;
+    margin: 0;
+    padding: 0;
 }
 
 .header-logo {
@@ -553,6 +569,44 @@ body {
     color: var(--color-danger);
     border: 1.5px solid rgba(239, 68, 68, 0.25);
     margin-top: 25px;
+}
+
+/* Button Loading & Disabled States */
+.btn:disabled,
+.btn.loading {
+    cursor: not-allowed !important;
+    pointer-events: none !important;
+    opacity: 0.82;
+    transform: none !important;
+}
+
+.btn-primary:disabled,
+.btn-primary.loading {
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.75), rgba(124, 58, 237, 0.75)) !important;
+    box-shadow: 0 4px 15px rgba(139, 92, 246, 0.25) !important;
+}
+
+.btn-orange:disabled,
+.btn-orange.loading {
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.75), rgba(234, 88, 12, 0.75)) !important;
+    box-shadow: 0 4px 15px rgba(249, 115, 22, 0.25) !important;
+}
+
+.btn-spinner {
+    display: inline-block;
+    font-size: 15px;
+    margin-right: 6px;
+    animation: btn-spin 0.85s linear infinite;
+    vertical-align: middle;
+}
+
+@keyframes btn-spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .text-link {
@@ -1061,7 +1115,7 @@ body {
     justify-content: center;
     align-items: center;
     cursor: pointer;
-    z-index: 6;
+    z-index: 10;
     backdrop-filter: blur(4px);
     transition: var(--transition-bounce);
 }
@@ -2134,14 +2188,17 @@ input:checked + .slider:before {
     color: var(--text-muted);
     font-size: 16px;
     cursor: pointer;
-    width: 30px;
-    height: 30px;
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    min-height: 38px;
     border-radius: 50%;
-    background-color: rgba(255, 255, 255, 0.04);
+    background-color: rgba(255, 255, 255, 0.06);
     display: flex;
     justify-content: center;
     align-items: center;
     transition: var(--transition-smooth);
+    touch-action: manipulation;
 }
 
 .btn-close-modal:hover {
@@ -2822,4 +2879,238 @@ input:checked + .slider:before {
 
 .confidence-bar.warning {
     background: linear-gradient(90deg, #f59e0b, #ef4444) !important;
+}
+
+/* ==========================================================================
+   WEBINTOAPP APK WRAPPER & MOBILE RESPONSIVE OPTIMIZATIONS
+   ========================================================================== */
+
+/* Mobile Touch Micro-Interactions */
+.btn:active,
+.btn-primary:active,
+.btn-secondary:active,
+.btn-white:active,
+.btn-close-modal:active,
+.chip:active {
+    transform: scale(0.96) !important;
+    filter: brightness(0.92);
+}
+
+.nav-item:active {
+    transform: scale(0.92);
+}
+
+/* Standalone & Mobile Viewport Edge-to-Edge Rules */
+@media (max-width: 600px), screen and (max-width: 600px), (display-mode: standalone), (display-mode: fullscreen) {
+    html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow-x: hidden;
+        overflow-y: hidden;
+        background-color: var(--bg-device);
+    }
+
+    body {
+        display: flex;
+        align-items: flex-start;
+        justify-content: flex-start;
+        margin: 0 !important;
+        margin-top: 0 !important;
+        padding: 0 !important;
+        padding-top: 0 !important;
+    }
+
+    .app-frame, .phone-screen {
+        width: 100vw;
+        max-width: 100vw;
+        height: 100vh;
+        height: 100dvh;
+        max-height: 100dvh;
+        padding: 0 !important;
+        margin: 0 !important;
+        border: none !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+    }
+
+    .app-device {
+        width: 100%;
+        height: 100%;
+        margin: 0 !important;
+        margin-top: 0 !important;
+        padding: 0 !important;
+        padding-top: 0 !important;
+        border: none !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        overflow-x: hidden;
+    }
+
+    /* Force mobile top padding, margin and side paddings */
+    .app-top-header,
+    .app-header,
+    .app-container,
+    .app-content {
+        padding-top: 2px !important;
+        margin-top: 0 !important;
+        padding-left: 12px !important;
+        padding-right: 12px !important;
+    }
+
+    .app-top-header, .app-header {
+        margin-top: 0 !important;
+        padding-top: 2px !important;
+        padding-bottom: 2px !important;
+        padding-left: 12px !important;
+        padding-right: 12px !important;
+        height: 42px;
+        min-height: 40px;
+        box-sizing: border-box;
+    }
+
+    .app-container {
+        width: 100vw;
+        max-width: 100vw;
+        margin-top: 0 !important;
+        padding-top: 2px !important;
+        padding-left: 12px !important;
+        padding-right: 12px !important;
+        box-sizing: border-box;
+    }
+
+    .app-nav-bar {
+        padding-bottom: max(8px, env(safe-area-inset-bottom));
+        padding-left: max(10px, env(safe-area-inset-left));
+        padding-right: max(10px, env(safe-area-inset-right));
+        height: calc(68px + env(safe-area-inset-bottom));
+    }
+
+    .app-content {
+        margin-top: 0 !important;
+        padding-top: 2px !important;
+        padding-left: 12px !important;
+        padding-right: 12px !important;
+        padding-bottom: 16px;
+        overflow-x: hidden;
+        box-sizing: border-box;
+    }
+
+    /* Modals edge-to-edge on mobile */
+    .guide-modal-overlay {
+        position: fixed;
+        width: 100vw;
+        height: 100vh;
+        height: 100dvh;
+        z-index: 9999;
+    }
+
+    .guide-modal-card {
+        width: 100vw;
+        max-width: 100vw;
+        max-height: 88vh;
+        max-height: 88dvh;
+        border-radius: 24px 24px 0 0;
+        padding-bottom: max(12px, env(safe-area-inset-bottom));
+    }
+
+    .guide-modal-body {
+        padding: 8px 16px 20px;
+        overflow-x: hidden;
+    }
+
+    /* Auth card responsive padding on small mobile screens */
+    .auth-card {
+        padding: 20px 16px;
+    }
+
+    .auth-header {
+        margin-bottom: 22px;
+    }
+
+    .auth-header h2 {
+        font-size: 24px;
+    }
+
+    /* Results card optimization */
+    .results-card {
+        padding: 18px 16px;
+        overflow-x: hidden;
+    }
+
+    .result-detail-item {
+        padding: 10px 0;
+    }
+
+    .detail-val {
+        font-size: 13.5px;
+    }
+
+    .banner-content h3 {
+        font-size: 16px;
+    }
+
+    .banner-content p {
+        font-size: 12px;
+    }
+}
+
+/* Admin Mobile Adaptations */
+@media screen and (max-width: 768px) {
+    .admin-portal-frame {
+        flex-direction: column;
+        height: 100%;
+        min-height: 100vh;
+        min-height: 100dvh;
+        overflow-y: auto;
+        overflow-x: hidden;
+    }
+
+    .admin-sidebar {
+        width: 100%;
+        height: auto;
+        padding: 14px 16px;
+        border-right: none;
+        border-bottom: 1px solid var(--border-color);
+    }
+
+    .sidebar-logo {
+        margin-bottom: 12px;
+    }
+
+    .sidebar-menu {
+        flex-direction: row;
+        overflow-x: auto;
+        gap: 6px;
+        padding-bottom: 4px;
+        scrollbar-width: none;
+    }
+
+    .sidebar-menu::-webkit-scrollbar {
+        display: none;
+    }
+
+    .menu-item {
+        padding: 8px 12px;
+        font-size: 12px;
+        white-space: nowrap;
+        width: auto;
+    }
+
+    .sidebar-footer {
+        display: none;
+    }
+
+    .admin-content-area {
+        padding: 16px 12px;
+        width: 100%;
+        overflow-x: hidden;
+    }
+
+    .table-container {
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
 }

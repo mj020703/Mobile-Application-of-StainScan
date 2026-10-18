@@ -12,6 +12,7 @@ Mud_cotton/
 *.npz
 *.log
 *.exe
+*.apk
 __pycache__/
 *.pyc
 DataSet/

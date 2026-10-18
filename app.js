@@ -9,33 +9,8 @@ const LIVE_RENDER_BACKEND = "https://stainscan-backend-gmbw.onrender.com";
 
 const CONFIG = {
     // Strictly points to the live Render backend (Render + MongoDB Atlas cloud cluster)
-    // ensuring mobile APK builds, emulators, WebViews, and web browsers communicate with the production server.
-    API_BASE_URL: (() => {
-        if (typeof window === "undefined") return LIVE_RENDER_BACKEND;
-
-        // Allow explicit developer override for offline local testing (?backend=local or ?local=1)
-        try {
-            const params = new URLSearchParams(window.location.search);
-            if (params.get("backend") === "local" || params.get("local") === "1") {
-                const origin = window.location.origin || "";
-                return (origin && !origin.startsWith("file:") && origin !== "null") ? origin : "http://localhost:5000";
-            }
-            const explicitBackend = params.get("backend");
-            if (explicitBackend && explicitBackend.startsWith("http")) {
-                return explicitBackend.replace(/\/+$/, "");
-            }
-        } catch (_) {}
-
-        // If explicitly opened on port 5000 (local Flask server), automatically use local server
-        try {
-            if (typeof window !== "undefined" && window.location && (window.location.port === "5000" || (window.location.host && window.location.host.endsWith(":5000")))) {
-                return window.location.origin;
-            }
-        } catch (_) {}
-
-        // Production default: always communicate directly with live Render server
-        return LIVE_RENDER_BACKEND;
-    })()
+    // ensuring mobile APK builds, emulators, WebViews, and web browsers communicate directly with the production server.
+    API_BASE_URL: LIVE_RENDER_BACKEND
 };
 
 // --- Default Knowledge Base Recommendations & Precaution Dataset ---
@@ -262,6 +237,8 @@ const I18N = {
             upload_tap: "Tap to Select Photo",
             upload_drag: "Or drag and drop image here",
             upload_limits: "JPG, PNG up to 10MB (Cotton Fabrics)",
+            btn_camera: "Camera",
+            btn_gallery: "Gallery",
             btn_analyze: "Begin Intelligent CNN Analysis",
             loader_preprocessing: "Preprocessing Image...",
             loader_reducing_noise: "Reducing background noise and resizing fabric details",
@@ -344,6 +321,8 @@ const I18N = {
             upload_tap: "Pinduta agud Magpili sang Litrato",
             upload_drag: "Ukon idul-ong kag ihulog ang litrato diri",
             upload_limits: "JPG, PNG tubtob 10MB (Tela nga Bulak)",
+            btn_camera: "Kamera",
+            btn_gallery: "Galeriya",
             btn_analyze: "Sugdan ang Maalam nga Pagusisa sang CNN",
             loader_preprocessing: "Ginatipon kag Ginausisa ang Litrato...",
             loader_reducing_noise: "Ginapanubo ang gahod sa background kag ginasibu ang tela",
@@ -536,7 +515,7 @@ class DataStore {
                 let scans = await res.json();
                 scans = scans.map(item => {
                     const conf = parseInt(item.confidence) || 0;
-                    if (conf < 70) {
+                    if (conf < 75 || item.stain === "Unidentified" || item.stain === "Unidentified Stain" || item.stain === "Unknown") {
                         item.stain = "Unidentified";
                         item.fabric = "N/A";
                     }
@@ -596,7 +575,7 @@ class DataStore {
         let modified = false;
         const normalized = raw.map(item => {
             const conf = parseInt(item.confidence) || 0;
-            if (conf < 70) {
+            if (conf < 75 || item.stain === "Unidentified" || item.stain === "Unidentified Stain" || item.stain === "Unknown") {
                 if (item.stain !== "Unidentified" && item.stain !== "Unidentified Stain") {
                     item.stain = "Unidentified";
                     modified = true;
@@ -847,8 +826,28 @@ document.addEventListener("DOMContentLoaded", () => {
     // Login Form Submit (proceeds directly without repeating splash intro)
     document.getElementById("loginForm").addEventListener("submit", (e) => {
         e.preventDefault();
+        const submitBtn = document.getElementById("btnLoginSubmit") || e.target.querySelector("button[type='submit']");
         const email = document.getElementById("login-email").value.trim().toLowerCase();
         const password = document.getElementById("login-password").value;
+
+        // Activate smooth loading state and disable button to prevent multiple submissions
+        const originalHtml = submitBtn ? submitBtn.innerHTML : null;
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.classList.add("loading");
+            const loadingText = (typeof I18N !== "undefined" && I18N.t)
+                ? (I18N.t("btn_signing_in") || "Logging in...")
+                : "Logging in...";
+            submitBtn.innerHTML = `<i class="fas fa-circle-notch fa-spin btn-spinner"></i> <span>${loadingText}</span>`;
+        }
+
+        const restoreBtn = () => {
+            if (submitBtn && originalHtml) {
+                submitBtn.disabled = false;
+                submitBtn.classList.remove("loading");
+                submitBtn.innerHTML = originalHtml;
+            }
+        };
 
         fetch(DataStore.getApiUrl("/api/login"), {
             method: "POST",
@@ -875,9 +874,11 @@ document.addEventListener("DOMContentLoaded", () => {
             showToast(`Welcome back, ${matchedUser.name}!`);
             navigateTo("screen-dashboard");
             document.getElementById("loginForm").reset();
+            restoreBtn();
         })
         .catch(err => {
             showToast(err.message || "Invalid email credentials or password.", "error");
+            restoreBtn();
         });
     });
 
@@ -1032,9 +1033,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const scannerLoader = document.getElementById("scannerLoader");
     const resultsCard = document.getElementById("resultsCard");
 
-    // File selection triggers
+    // File selection triggers - tapping anywhere inside the drop card opens native photo picker
     dropArea.addEventListener("click", (e) => {
-        if (e.target === fileInput) return; // Prevent double trigger from bubbling
+        if (e.target === fileInput) return; // Prevent double trigger
         if (!selectedImageBase64 && e.target !== btnClearPreview && !btnClearPreview.contains(e.target)) {
             fileInput.click();
         }
@@ -1112,7 +1113,9 @@ document.addEventListener("DOMContentLoaded", () => {
     function resetScanFormState() {
         selectedImageBase64 = null;
         scanResultData = null;
-        fileInput.value = "";
+        if (fileInput) fileInput.value = "";
+        const resultStainTypeEl = document.getElementById("resultStainType");
+        if (resultStainTypeEl) resultStainTypeEl.style.color = "";
         uploadedImagePreview.src = "";
         uploadPreviewState.style.display = "none";
         uploadEmptyState.style.display = "flex";
@@ -1263,9 +1266,10 @@ document.addEventListener("DOMContentLoaded", () => {
     function processScanningSuccess(stain, fabric, confidence, recommendation = null) {
         const confNum = parseInt(confidence) || 0;
         const isCotton = fabric.includes("Cotton") || fabric.includes("Bulak");
-        const isLowConfidence = confNum < 70 ||
+        const isLowConfidence = confNum < 75 ||
             stain === "Unidentified" ||
             stain === "Unidentified Stain" ||
+            stain === "Unknown" ||
             stain === "Not Classified" ||
             (recommendation && (recommendation.is_classified === false || recommendation.status === "Unidentified" || recommendation.status === "inconclusive"));
 
@@ -1283,31 +1287,43 @@ document.addEventListener("DOMContentLoaded", () => {
         const resultProcedureStepCount = document.getElementById("resultProcedureStepCount");
         const btnViewCleaningGuide = document.getElementById("btnViewCleaningGuide");
 
-        // 1. Check if scan is below 70% threshold (Unidentified / Inconclusive)
+        // 1. Check if scan is below 75% threshold, narrow margin, or out-of-distribution (Unidentified / Inconclusive)
         if (isLowConfidence) {
             const displayTitle = I18N.currentLang === "hil" ? "Indi Masigurado nga Digo" : "Unidentified Stain";
             const displayFabric = I18N.currentLang === "hil" ? "Wala Makilal-an / N/A" : "Unidentified / N/A";
 
-            // Hide the top status badge altogether for inconclusive scans (<70%)
+            // Hide the top status badge altogether for inconclusive scans (<75%)
             if (resultsBadge) {
                 resultsBadge.style.display = "none";
             }
 
             const resultsCardEl = document.getElementById("resultsCard");
             if (resultsCardEl) {
-                resultsCardEl.style.borderColor = "rgba(255, 255, 255, 0.1)";
+                resultsCardEl.style.borderColor = "rgba(245, 158, 11, 0.3)";
             }
 
-            // Core fields clearly visible
+            // Core fields clearly visible with warning amber state
             resultStainType.textContent = displayTitle;
+            resultStainType.style.color = "#f59e0b";
             resultFabricType.textContent = displayFabric;
             resultConfidence.textContent = `${confNum}%`;
             resultConfidenceBar.style.width = `${confNum}%`;
             resultConfidenceBar.className = "confidence-bar warning";
 
-            // Hide bottom notice warning card so UI remains sleek and uncluttered
-            if (resultCautionCard) {
-                resultCautionCard.style.display = "none";
+            // Render prominent Uncertainty Warning Card with caution message
+            const cautionMsg = (recommendation && recommendation.caution)
+                ? recommendation.caution
+                : ((recommendation && recommendation.recommendation && recommendation.recommendation.caution)
+                    ? recommendation.recommendation.caution
+                    : "");
+            if (resultCautionCard && resultCautionText) {
+                resultCautionText.textContent = cautionMsg || (I18N.currentLang === "hil"
+                    ? "Indi masigurado ang resulta (<75% o indi maathag nga digo). Palihog magkuha sang mas masanag kag klaro nga litrato sang nadugaan nga tela."
+                    : "Inconclusive scan (<75% confidence or narrow probability margin). Please scan a clear, well-lit photo of a stained cotton garment.");
+                if (resultCautionTitle) {
+                    resultCautionTitle.textContent = I18N.currentLang === "hil" ? "Pahibalo sa Pag-scan" : "Scan Uncertainty Warning";
+                }
+                resultCautionCard.style.display = "block";
             }
 
             // Strictly do NOT display cleaning procedure or guide button for low-confidence scans
@@ -1325,7 +1341,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 confidence: confNum,
                 probabilities: (recommendation && recommendation.probabilities) ? recommendation.probabilities : null,
                 steps: [],
-                caution: "",
+                caution: cautionMsg,
                 materials: [],
                 timestamp: new Date().toISOString(),
                 status: "Pending",
@@ -1341,9 +1357,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 DataStore.saveHistoryCloud(scanResultData);
             }
 
-            DataStore.addLog("warning", `Inconclusive CNN Scan below 70%: Unidentified (${confNum}% confidence)`);
+            DataStore.addLog("warning", `Inconclusive CNN Scan (<75% or ambiguous margin): Unidentified (${confNum}% confidence)`);
             resultsCard.style.display = "block";
-            showToast(I18N.currentLang === "hil" ? "Indi Masigurado nga Pag-scan (<70%)" : "Inconclusive Scan (<70%)", "warning");
+            showToast(I18N.currentLang === "hil" ? "Indi Masigurado nga Pag-scan (<75%)" : "Inconclusive Scan (<75%)", "warning");
             return;
         }
 
@@ -1398,6 +1414,7 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         resultStainType.textContent = I18N.tStain(stain);
+        resultStainType.style.color = "";
         resultFabricType.textContent = I18N.tFabric(scanResultData.fabric);
         resultConfidence.textContent = `${confNum}%`;
         resultConfidenceBar.style.width = `${confNum}%`;
@@ -1501,7 +1518,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const rawHistory = historyList || JSON.parse(localStorage.getItem(`stainscan_history_${currentUser.email}`)) || [];
         const history = rawHistory.map(item => {
             const conf = parseInt(item.confidence) || 0;
-            if (conf < 70) {
+            if (conf < 75 || item.stain === "Unidentified" || item.stain === "Unidentified Stain" || item.stain === "Unknown") {
                 item.stain = "Unidentified";
                 item.fabric = "N/A";
             }
@@ -1532,7 +1549,7 @@ document.addEventListener("DOMContentLoaded", () => {
             itemEl.className = "scan-item";
 
             const confVal = parseInt(item.confidence) || 0;
-            const isUnidentified = confVal < 70 || item.stain === "Unidentified" || item.stain === "Unidentified Stain" || item.stain === "Not Classified";
+            const isUnidentified = confVal < 75 || item.stain === "Unidentified" || item.stain === "Unidentified Stain" || item.stain === "Unknown" || item.stain === "Not Classified";
 
             let classType = "unknown";
             let icon = "fa-triangle-exclamation";
