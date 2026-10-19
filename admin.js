@@ -6,16 +6,37 @@
 
 const LIVE_RENDER_BACKEND = "https://stainscan-backend-gmbw.onrender.com";
 
+// Intelligently select API backend URL:
+// 1. If accessed over HTTP/HTTPS from localhost or local LAN IP (e.g., http://localhost:5000), use current origin.
+// 2. If hosted on Render (e.g. https://...onrender.com), use window.location.origin.
+// 3. If accessed from local file system (file://), default to LIVE_RENDER_BACKEND.
+function resolveApiBaseUrl() {
+    if (typeof window !== "undefined" && window.location && window.location.protocol.startsWith("http")) {
+        const host = window.location.hostname;
+        if (host === "localhost" || host === "127.0.0.1" || host.startsWith("192.168.") || host.includes("onrender.com")) {
+            return window.location.origin;
+        }
+    }
+    return LIVE_RENDER_BACKEND;
+}
+
 const CONFIG = {
-    // Production cloud backend (Render + MongoDB Atlas) where the mobile APK writes scans and treatments.
-    // By default, the admin portal always connects directly to the live cloud deployment so that scans
-    // from mobile APK users across any network (cellular data or separate Wi-Fi) appear immediately.
-    API_BASE_URL: LIVE_RENDER_BACKEND
+    API_BASE_URL: resolveApiBaseUrl()
 };
 
 class AdminDataStore {
     static getApiUrl(endpoint) {
         return `${CONFIG.API_BASE_URL}${endpoint}`;
+    }
+
+    static async getDbStatus() {
+        try {
+            const res = await fetch(this.getApiUrl("/api/db-status"));
+            if (res.ok) return await res.json();
+        } catch (e) {
+            console.warn("Could not fetch DB status:", e);
+        }
+        return null;
     }
 
     static async init() {
@@ -52,17 +73,18 @@ class AdminDataStore {
             const res = await fetch(this.getApiUrl("/api/users"));
             if (res.ok) return await res.json();
         } catch (e) {
-            console.error("Failed to fetch users from cloud:", e);
+            console.error("Failed to fetch users from database:", e);
         }
         return [];
     }
 
     static async getHistory() {
         try {
-            const res = await fetch(this.getApiUrl("/api/scans"));
+            // Fetch live scan documents excluding large Base64 images for optimal speed
+            const res = await fetch(this.getApiUrl("/api/scans?limit=50&include_images=false"));
             if (res.ok) return await res.json();
         } catch (e) {
-            console.error("Failed to fetch scans from cloud:", e);
+            console.error("Failed to fetch scans from database:", e);
         }
         return [];
     }
@@ -257,8 +279,31 @@ document.addEventListener("DOMContentLoaded", () => {
         showToast("Logged out from Admin Console.");
     });
 
+    // --- LIVE DATABASE STATUS INDICATOR ---
+    async function updateDbStatusBadge() {
+        const dbBadge = document.getElementById("dbStatusBadge");
+        if (!dbBadge) return;
+        const status = await AdminDataStore.getDbStatus();
+        if (status && status.is_connected && !status.is_demo_mode) {
+            dbBadge.innerHTML = `<i class="fas fa-database" style="color:#10b981;"></i> <span>MongoDB Atlas: <strong>Live</strong></span>`;
+            dbBadge.style.borderColor = "rgba(16, 185, 129, 0.4)";
+            dbBadge.style.color = "#10b981";
+            dbBadge.title = `Connected to MongoDB Atlas cluster '${status.database_name}'. Live collections: users (${status.collections?.users || 0}), scans (${status.collections?.scans || 0}), metrics (${status.collections?.metrics || 0})`;
+        } else if (status && status.status === "fallback_mode") {
+            dbBadge.innerHTML = `<i class="fas fa-database" style="color:#f59e0b;"></i> <span>Database: <strong>Fallback Mode (Local JSON)</strong></span>`;
+            dbBadge.style.borderColor = "rgba(245, 158, 11, 0.4)";
+            dbBadge.style.color = "#f59e0b";
+            dbBadge.title = "MONGO_URI not configured or unreachable; using local scans.json and users.json";
+        } else {
+            dbBadge.innerHTML = `<i class="fas fa-triangle-exclamation" style="color:#ef4444;"></i> <span>Backend: <strong>Connecting...</strong></span>`;
+            dbBadge.style.borderColor = "rgba(239, 68, 68, 0.4)";
+            dbBadge.style.color = "#ef4444";
+        }
+    }
+
     // --- OVERVIEW & ANALYTICS PANELS ---
     async function renderOverview() {
+        updateDbStatusBadge();
         const [users, history, metrics] = await Promise.all([
             AdminDataStore.getUsers(),
             AdminDataStore.getHistory(),

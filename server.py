@@ -224,6 +224,31 @@ DEFAULT_KB = {
     "Mud": RECOMMENDATION_DATABASE["mud"]["white"]
 }
 
+# Load .env file automatically if present in workspace
+def load_env_file():
+    env_paths = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"),
+        os.path.join(os.getcwd(), ".env")
+    ]
+    for env_path in env_paths:
+        if os.path.exists(env_path):
+            try:
+                with open(env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            k = k.strip()
+                            v = v.strip().strip("'\"")
+                            if k and not os.environ.get(k):
+                                os.environ[k] = v
+                print(f"Loaded environment variables from '{env_path}'.")
+                break
+            except Exception as e:
+                print(f"Notice: Failed to load .env file '{env_path}': {e}")
+
+load_env_file()
+
 # Initialize MongoDB Connection & Resilient Database Handling
 MONGO_URI = os.environ.get("MONGO_URI") or os.environ.get("MONGODB_URI") or os.environ.get("DATABASE_URL") or ""
 MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "stainscan_db")
@@ -425,49 +450,85 @@ def execute_db_operation(op, fallback_fn=None):
 init_mongodb()
 
 def get_metrics():
-    all_scans = get_scans()
-    mobile_users = get_mobile_user_count()
+    """
+    Fetches live statistics and counters directly from MongoDB Atlas collections:
+    1. Checks the 'metrics' collection for a persisted 'app_metrics' document.
+    2. If absent or newly initialized, dynamically counts live documents across the
+       'scans' and 'users' collections without loading full Base64 images into memory.
+    3. Falls back to mock_db / metrics.json only when running in offline/local demo mode.
+    """
+    def _op(d):
+        # 1. Check if metrics document exists in MongoDB Atlas 'metrics' collection
+        doc = d["metrics"].find_one({"_id": "app_metrics"})
+        if not doc:
+            doc = d["metrics"].find_one({})
 
-    # 1. If scans collection is empty or dropped, return clean 0 values
-    if not all_scans:
-        clean_zero_metrics = {
-            "total_scans": 0,
-            "total_cnn_scans_run": 0,
-            "totalScansCount": 0,
-            "successful_treatments": 0,
-            "totalTreatedCount": 0,
+        # Count live mobile users from 'users' collection
+        mobile_users = d["users"].count_documents({"$or": [{"role": "user"}, {"role": {"$ne": "admin"}}]})
+
+        if doc:
+            doc["_id"] = str(doc["_id"])
+            doc["total_users"] = mobile_users
+            doc["registered_mobile_users"] = mobile_users
+            doc["totalUsersCount"] = mobile_users
+            doc["database_source"] = "mongodb_atlas"
+            doc["is_live"] = True
+            return doc
+
+        # 2. If no metrics document exists yet, aggregate live counts directly from MongoDB collections
+        total_scans = d["scans"].count_documents({})
+        treated_count = d["scans"].count_documents({"status": "Treated"})
+        oil_count = d["scans"].count_documents({"stain": "Used Cooking Oil"})
+        ink_count = d["scans"].count_documents({"stain": "Black Ballpen Ink"})
+        mud_count = d["scans"].count_documents({"stain": "Mud"})
+
+        computed = {
+            "_id": "app_metrics",
+            "total_scans": total_scans,
+            "total_cnn_scans_run": total_scans,
+            "totalScansCount": total_scans,
+            "successful_treatments": treated_count,
+            "totalTreatedCount": treated_count,
             "total_users": mobile_users,
             "registered_mobile_users": mobile_users,
             "totalUsersCount": mobile_users,
-            "stain_counts": {"Used Cooking Oil": 0, "Black Ballpen Ink": 0, "Mud": 0}
+            "stain_counts": {
+                "Used Cooking Oil": oil_count,
+                "Black Ballpen Ink": ink_count,
+                "Mud": mud_count
+            },
+            "database_source": "mongodb_atlas",
+            "is_live": True,
+            "status": "ok"
         }
-        save_metrics(clean_zero_metrics)
-        return clean_zero_metrics
+        d["metrics"].replace_one({"_id": "app_metrics"}, computed, upsert=True)
+        return computed
 
-    # 2. Scans exist: compute real metrics directly from the scans and history collections
-    stain_counts = {"Used Cooking Oil": 0, "Black Ballpen Ink": 0, "Mud": 0}
-    treated_count = 0
-    for s in all_scans:
-        st = s.get("stain")
-        if st in stain_counts:
-            stain_counts[st] += 1
-        if s.get("status") == "Treated":
-            treated_count += 1
+    def _fb():
+        all_scans = mock_db["scans"]
+        mobile_users = len([u for u in mock_db["users"] if u.get("role") != "admin"])
+        treated = len([s for s in all_scans if s.get("status") == "Treated"])
+        counts = {"Used Cooking Oil": 0, "Black Ballpen Ink": 0, "Mud": 0}
+        for s in all_scans:
+            st = s.get("stain")
+            if st in counts:
+                counts[st] += 1
+        return {
+            "total_scans": len(all_scans),
+            "total_cnn_scans_run": len(all_scans),
+            "totalScansCount": len(all_scans),
+            "successful_treatments": treated,
+            "totalTreatedCount": treated,
+            "total_users": mobile_users,
+            "registered_mobile_users": mobile_users,
+            "totalUsersCount": mobile_users,
+            "stain_counts": counts,
+            "database_source": "local_fallback",
+            "is_live": False,
+            "status": "ok (fallback)"
+        }
 
-    metrics = {
-        "total_scans": len(all_scans),
-        "total_cnn_scans_run": len(all_scans),
-        "totalScansCount": len(all_scans),
-        "successful_treatments": treated_count,
-        "totalTreatedCount": treated_count,
-        "total_users": mobile_users,
-        "registered_mobile_users": mobile_users,
-        "totalUsersCount": mobile_users,
-        "stain_counts": stain_counts,
-        "status": "ok"
-    }
-    save_metrics(metrics)
-    return metrics
+    return execute_db_operation(_op, fallback_fn=_fb)
 
 def save_metrics(metrics):
     def _op(d):
@@ -600,13 +661,23 @@ def add_user(user):
     return res
 
 def find_user_by_email(email):
+    clean_email = str(email or "").strip().lower()
+    if not clean_email:
+        return None
+
     def _op(d):
-        user = d["users"].find_one({"email": email})
+        import re
+        user = d["users"].find_one({"email": clean_email})
+        if not user:
+            # Case-insensitive fallback query against MongoDB Atlas
+            user = d["users"].find_one({"email": {"$regex": f"^{re.escape(clean_email)}$", "$options": "i"}})
         if user:
             user["_id"] = str(user["_id"])
         return user
+
     def _fb():
-        return next((u for u in mock_db["users"] if u["email"] == email), None)
+        return next((u for u in mock_db["users"] if str(u.get("email", "")).strip().lower() == clean_email), None)
+
     return execute_db_operation(_op, fallback_fn=_fb)
 
 def get_kb():
@@ -622,15 +693,22 @@ def save_kb(kb_data):
     execute_db_operation(_op, fallback_fn=lambda: None)
     mock_db["kb"] = kb_data
 
-def get_scans(email=None):
+def get_scans(email=None, limit=None, include_images=True):
     def _op(d):
         query = {"email": email} if email else {}
-        scans = list(d["scans"].find(query).sort("timestamp", -1))
+        projection = None if include_images else {"image": 0}
+        cursor = d["scans"].find(query, projection).sort("timestamp", -1)
+        if limit:
+            cursor = cursor.limit(limit)
+        scans = list(cursor)
         # Ensure completed scans from 'history' collection are also merged if present
         try:
             colls = d.list_collection_names()
             if "history" in colls:
-                history_scans = list(d["history"].find(query).sort("timestamp", -1))
+                hist_cursor = d["history"].find(query, projection).sort("timestamp", -1)
+                if limit:
+                    hist_cursor = hist_cursor.limit(limit)
+                history_scans = list(hist_cursor)
                 existing_ids = {str(s.get("id") or s.get("_id")) for s in scans}
                 for hs in history_scans:
                     hs_id = str(hs.get("id") or hs.get("_id"))
@@ -644,8 +722,14 @@ def get_scans(email=None):
         return scans
     def _fb():
         if email:
-            return [s for s in mock_db["scans"] if s["email"] == email]
-        return sorted(mock_db["scans"], key=lambda s: s.get("timestamp", ""), reverse=True)
+            items = [s for s in mock_db["scans"] if s["email"] == email]
+        else:
+            items = sorted(mock_db["scans"], key=lambda s: s.get("timestamp", ""), reverse=True)
+        if not include_images:
+            items = [{k: v for k, v in s.items() if k != "image"} for s in items]
+        if limit:
+            items = items[:limit]
+        return items
     return execute_db_operation(_op, fallback_fn=_fb)
 
 def add_scan(scan):
@@ -726,62 +810,109 @@ def api_recommendation():
 
 
 @app.route("/api/register", methods=["POST", "OPTIONS"])
+@app.route("/api/signup", methods=["POST", "OPTIONS"])
+@app.route("/api/auth/register", methods=["POST", "OPTIONS"])
 def api_register():
     if request.method == "OPTIONS":
         return jsonify({"status": "ok"})
-    data = request.get_json()
-    if not data or "email" not in data or "password" not in data or "name" not in data:
-        return jsonify({"error": "Required registration parameters missing"}), 400
     
-    email = data["email"].strip().lower()
-    name = data["name"].strip()
-    password = data["password"]
-    avatar = data.get("avatar", name)
-    
-    existing = find_user_by_email(email)
-    if existing:
-        return jsonify({"error": "Email address already registered"}), 409
+    try:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "Invalid request format. JSON object expected."}), 400
         
-    new_user = {
-        "name": name,
-        "email": email,
-        "password": password,
-        "role": "user",
-        "avatar": avatar
-    }
-    
-    saved_user = add_user(new_user)
-    add_log("info", f"New user registered: {email}")
-    return jsonify({
-        "name": saved_user["name"],
-        "email": saved_user["email"],
-        "role": saved_user["role"],
-        "avatar": saved_user["avatar"]
-    }), 201
+        raw_name = data.get("name")
+        raw_email = data.get("email")
+        raw_password = data.get("password")
+        
+        if raw_name is None or raw_email is None or raw_password is None:
+            return jsonify({"error": "Required registration parameters missing. Name, email, and password are required."}), 400
+        
+        name = str(raw_name).strip()
+        email = str(raw_email).strip().lower()
+        password = str(raw_password)
+        avatar = str(data.get("avatar") or name)
+        
+        if not name:
+            return jsonify({"error": "Full name cannot be blank."}), 400
+        if not email:
+            return jsonify({"error": "Email address cannot be blank."}), 400
+        if "@" not in email or "." not in email:
+            return jsonify({"error": "Please enter a valid email address."}), 400
+        if len(password) < 6:
+            return jsonify({"error": "Password must be at least 6 characters."}), 400
+            
+        existing = find_user_by_email(email)
+        if existing:
+            return jsonify({"error": "Email address already registered"}), 409
+            
+        new_user = {
+            "name": name,
+            "email": email,
+            "password": password,
+            "role": "user",
+            "avatar": avatar
+        }
+        
+        saved_user = add_user(new_user)
+        add_log("info", f"New user registered: {email}")
+        
+        user_name = saved_user.get("name", name) if isinstance(saved_user, dict) else name
+        user_email = saved_user.get("email", email) if isinstance(saved_user, dict) else email
+        user_role = saved_user.get("role", "user") if isinstance(saved_user, dict) else "user"
+        user_avatar = saved_user.get("avatar", avatar) if isinstance(saved_user, dict) else avatar
+        
+        return jsonify({
+            "name": user_name,
+            "email": user_email,
+            "role": user_role,
+            "avatar": user_avatar
+        }), 201
+
+    except Exception as e:
+        print(f"Error during registration: {e}")
+        return jsonify({"error": "A server error occurred during registration. Please try again."}), 500
 
 @app.route("/api/login", methods=["POST", "OPTIONS"])
+@app.route("/api/signin", methods=["POST", "OPTIONS"])
+@app.route("/api/auth/login", methods=["POST", "OPTIONS"])
 def api_login():
     if request.method == "OPTIONS":
         return jsonify({"status": "ok"})
-    data = request.get_json()
-    if not data or "email" not in data or "password" not in data:
-        return jsonify({"error": "Missing login credentials"}), 400
+    
+    try:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "Invalid request format. JSON object expected."}), 400
         
-    email = data["email"].strip().lower()
-    password = data["password"]
-    
-    user = find_user_by_email(email)
-    if user and user["password"] == password:
-        add_log("info", f"User login successful: {email}")
-        return jsonify({
-            "name": user["name"],
-            "email": user["email"],
-            "role": user["role"],
-            "avatar": user.get("avatar", user["name"])
-        })
-    
-    add_log("warning", f"Failed login attempt for: {email}")
-    return jsonify({"error": "Invalid email credentials or password"}), 401
+        raw_email = data.get("email")
+        raw_password = data.get("password")
+        
+        if raw_email is None or raw_password is None:
+            return jsonify({"error": "Missing login credentials. Both email and password are required."}), 400
+        
+        email = str(raw_email).strip().lower()
+        password = str(raw_password)
+        
+        if not email or not password:
+            return jsonify({"error": "Email address and password cannot be blank."}), 400
+            
+        user = find_user_by_email(email)
+        if user and str(user.get("password", "")) == password:
+            add_log("info", f"User login successful: {email}")
+            return jsonify({
+                "name": user.get("name", "User"),
+                "email": user.get("email", email),
+                "role": user.get("role", "user"),
+                "avatar": user.get("avatar") or user.get("name", "User")
+            }), 200
+        
+        add_log("warning", f"Failed login attempt for: {email}")
+        return jsonify({"error": "Invalid email credentials or password"}), 401
+
+    except Exception as e:
+        print(f"Error during login: {e}")
+        return jsonify({"error": "A server error occurred during login. Please try again."}), 500
 
 @app.route("/api/users", methods=["GET", "OPTIONS"])
 def api_users():
@@ -845,7 +976,10 @@ def api_scans():
         return jsonify(saved_scan), 201
         
     email = request.args.get("email")
-    return jsonify(get_scans(email))
+    limit = request.args.get("limit", type=int)
+    # Default include_images to True only when querying by specific user email; false for dashboard tables
+    include_images = request.args.get("include_images", "true" if email else "false").lower() in ["1", "true", "yes"]
+    return jsonify(get_scans(email=email, limit=limit, include_images=include_images))
 
 @app.route("/api/scans/<scan_id>", methods=["PUT", "PATCH", "OPTIONS"])
 def api_update_scan(scan_id):
@@ -1024,6 +1158,37 @@ def api_logs():
         add_log(data["type"], data["text"])
         return jsonify({"success": True})
     return jsonify(get_logs())
+
+@app.route("/api/db-status", methods=["GET", "OPTIONS"])
+def api_db_status():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"})
+
+    global client, db, is_demo_mode
+    active_db = get_db()
+    is_connected = False
+    details = {
+        "status": "connected" if (active_db is not None and not is_demo_mode) else "fallback_mode",
+        "is_demo_mode": is_demo_mode or (active_db is None),
+        "database_name": MONGO_DB_NAME if (active_db is not None and not is_demo_mode) else "local_json_mock",
+        "mongo_configured": bool(MONGO_URI)
+    }
+
+    if active_db is not None and client is not None:
+        try:
+            client.admin.command('ping')
+            is_connected = True
+            details["collections"] = {
+                "users": active_db["users"].count_documents({}),
+                "scans": active_db["scans"].count_documents({}),
+                "metrics": active_db["metrics"].count_documents({})
+            }
+        except Exception as e:
+            is_connected = False
+            details["ping_error"] = str(e)
+
+    details["is_connected"] = is_connected
+    return jsonify(details), 200
 
 # ── Global model handle ───────────────────────────────────────────────────────
 model = None
