@@ -4,7 +4,8 @@ import json
 import os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 from datetime import datetime
-from PIL import Image, ImageOps
+import traceback
+from PIL import Image, ImageOps, UnidentifiedImageError
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
@@ -1219,24 +1220,50 @@ def preprocess_image(pil_image: Image.Image) -> np.ndarray:
       5. Apply MobileNetV2 preprocess_input to scale pixel values to [-1.0, 1.0]
       6. Expand batch dimension -> shape (1, 224, 224, 3)
     """
+    if pil_image is None:
+        raise ValueError("Cannot preprocess a None image object.")
+
+    # 1. Correct EXIF orientation
     try:
         pil_image = ImageOps.exif_transpose(pil_image)
-    except Exception:
-        pass
+    except Exception as exif_err:
+        print(f"[Preprocessing] EXIF orientation warning: {exif_err}")
 
+    # 2. Determine target input shape
     target_size = IMAGE_SIZE
     if model is not None and hasattr(model, "input_shape") and model.input_shape:
-        shape = model.input_shape
-        if len(shape) == 4 and shape[1] is not None and shape[2] is not None:
-            target_size = (int(shape[1]), int(shape[2]))
+        try:
+            shape = model.input_shape
+            if len(shape) == 4 and shape[1] is not None and shape[2] is not None:
+                target_size = (int(shape[1]), int(shape[2]))
+        except Exception as shape_err:
+            print(f"[Preprocessing] Model input_shape lookup warning: {shape_err}")
+            target_size = IMAGE_SIZE
 
-    img = pil_image.convert("RGB").resize(target_size, Image.BILINEAR)
-    arr = np.array(img, dtype=np.uint8)
-    enhanced = apply_clahe(arr)
-    if HAS_TF:
-        arr_norm = preprocess_input(enhanced.astype(np.float32))
-    else:
+    # 3. Convert to RGB and resize
+    try:
+        img = pil_image.convert("RGB").resize(target_size, Image.BILINEAR)
+        arr = np.array(img, dtype=np.uint8)
+    except Exception as img_err:
+        raise ValueError(f"Failed converting or resizing image to array: {img_err}")
+
+    # 4. Apply CIELAB CLAHE contrast enhancement
+    try:
+        enhanced = apply_clahe(arr)
+    except Exception as clahe_err:
+        print(f"[Preprocessing] CLAHE failed ({clahe_err}), proceeding with raw array.")
+        enhanced = arr
+
+    # 5. MobileNetV2 normalization [-1.0, 1.0]
+    try:
+        if HAS_TF:
+            arr_norm = preprocess_input(enhanced.astype(np.float32))
+        else:
+            arr_norm = (enhanced.astype(np.float32) / 127.5) - 1.0
+    except Exception as norm_err:
+        print(f"[Preprocessing] Normalization warning ({norm_err}), using direct scaling.")
         arr_norm = (enhanced.astype(np.float32) / 127.5) - 1.0
+
     return np.expand_dims(arr_norm, axis=0)   # (1, 224, 224, 3)
 
 
@@ -1424,61 +1451,157 @@ def predict():
         return jsonify({"status": "ok"})
 
     global model
-    if model is None:
-        load_model()
-
-    data = request.get_json()
-    if not data or "image" not in data:
-        return jsonify({"error": "No image data provided in the request payload."}), 400
-
-    base64_str = data["image"]
-    if "," in base64_str:
-        base64_str = base64_str.split(",")[1]
-
-    # Check fabric color / type in request context
-    fabric_context = data.get("fabric_color") or data.get("fabric_type") or data.get("fabric") or ""
-
     try:
-        image_bytes = base64.b64decode(base64_str)
-        raw_image = Image.open(BytesIO(image_bytes))
+        # 1. Parse and validate JSON request body
         try:
-            image = ImageOps.exif_transpose(raw_image).convert("RGB")
-        except Exception:
-            image = raw_image.convert("RGB")
+            data = request.get_json(silent=True)
+        except Exception as json_err:
+            print(f"[Predict] Malformed JSON error: {json_err}")
+            return jsonify({
+                "error": "Malformed JSON payload in request.",
+                "status": "error",
+                "details": str(json_err)
+            }), 400
 
-        # Ensure model is ready; never return fake mock predictions
+        if not isinstance(data, dict):
+            return jsonify({
+                "error": "Invalid request payload. Expected a JSON object.",
+                "status": "error"
+            }), 400
+
+        raw_b64 = data.get("image")
+        if not raw_b64 or not isinstance(raw_b64, str) or not raw_b64.strip():
+            return jsonify({
+                "error": "No image data provided. Please provide a valid base64 image string in the 'image' field.",
+                "status": "error"
+            }), 400
+
+        base64_str = raw_b64.strip()
+        if "," in base64_str:
+            base64_str = base64_str.split(",", 1)[1].strip()
+
+        if not base64_str:
+            return jsonify({
+                "error": "Empty base64 image payload.",
+                "status": "error"
+            }), 400
+
+        # Check fabric color / type in request context
+        fabric_context = str(data.get("fabric_color") or data.get("fabric_type") or data.get("fabric") or "").strip()
+        user_email = data.get("email")
+
+        # 2. Decode base64 image data
+        try:
+            padded_b64 = base64_str + '=' * (-len(base64_str) % 4)
+            image_bytes = base64.b64decode(padded_b64)
+        except Exception as b64_err:
+            print(f"[Predict] Base64 decoding failed: {b64_err}")
+            return jsonify({
+                "error": "Invalid base64-encoded image string. Decoding failed.",
+                "status": "error",
+                "details": str(b64_err)
+            }), 400
+
+        if not image_bytes:
+            return jsonify({
+                "error": "Decoded image data is empty.",
+                "status": "error"
+            }), 400
+
+        # 3. Open image with Pillow and handle EXIF orientation
+        try:
+            raw_image = Image.open(BytesIO(image_bytes))
+            raw_image.load()  # Force load pixel data to detect truncation or corruption early
+        except (UnidentifiedImageError, OSError, IOError, ValueError) as pil_open_err:
+            print(f"[Predict] Image identification/decoding failed: {pil_open_err}")
+            return jsonify({
+                "error": "Unsupported or corrupted image file. Please upload a valid JPEG, PNG, or WEBP image.",
+                "status": "error",
+                "details": str(pil_open_err)
+            }), 400
+        except Exception as pil_err:
+            print(f"[Predict] Unexpected image decoding error: {pil_err}")
+            return jsonify({
+                "error": "Failed to decode the provided image.",
+                "status": "error",
+                "details": str(pil_err)
+            }), 400
+
+        try:
+            image = ImageOps.exif_transpose(raw_image)
+        except Exception as exif_err:
+            print(f"[Predict] EXIF orientation warning: {exif_err}")
+            image = raw_image
+
+        try:
+            image = image.convert("RGB")
+        except Exception as conv_err:
+            print(f"[Predict] RGB conversion failed: {conv_err}")
+            return jsonify({
+                "error": "Failed to convert image to RGB color space.",
+                "status": "error",
+                "details": str(conv_err)
+            }), 400
+
+        # 4. Ensure model is ready; never return fake mock predictions
         if model is None:
             load_model()
             if model is None:
                 err_detail = LAST_MODEL_ERROR or "CNN model weights file not loaded on server."
-                print(f"Prediction requested but model is unavailable: {err_detail}")
+                print(f"[Predict] Prediction requested but model is unavailable: {err_detail}")
                 return jsonify({
                     "error": "CNN model unavailable on server. Please ensure the model file is deployed.",
                     "status": "error",
                     "details": err_detail
                 }), 503
 
-        # 1. Image Quality & Out-of-Distribution Plausibility Checks
+        # 5. Image Quality & Out-of-Distribution Plausibility Checks
         # Prevent CLAHE contrast equalization from inflating flat/uniform sensor noise into artificial "Mud"
-        arr_raw = np.array(image.resize((224, 224), Image.BILINEAR), dtype=np.uint8)
-        gray_raw = arr_raw.mean(axis=2)
-        contrast_std = float(np.std(gray_raw))
+        is_flat_surface = False
+        is_vivid_non_fabric = False
+        contrast_std = 0.0
+        mean_sat = 0.0
+
+        try:
+            arr_raw = np.array(image.resize((224, 224), Image.BILINEAR), dtype=np.uint8)
+            gray_raw = arr_raw.mean(axis=2)
+            contrast_std = float(np.std(gray_raw))
+            is_flat_surface = (contrast_std < 4.0)
+        except Exception as ood_contrast_err:
+            print(f"[Predict] Contrast check warning: {ood_contrast_err}")
+            arr_raw = np.zeros((224, 224, 3), dtype=np.uint8)
 
         # Check HSV color saturation to reject vivid non-fabric objects (e.g., Persian rugs, neon objects)
         try:
             import cv2
             hsv = cv2.cvtColor(arr_raw, cv2.COLOR_RGB2HSV)
             mean_sat = float(np.mean(hsv[:, :, 1]))
-        except Exception:
-            mean_sat = 0.0
+            is_vivid_non_fabric = (mean_sat > 75.0)
+        except Exception as ood_sat_err:
+            print(f"[Predict] Saturation check warning: {ood_sat_err}")
 
-        is_flat_surface = (contrast_std < 4.0)
-        is_vivid_non_fabric = (mean_sat > 75.0)
+        # 6. Preprocess uploaded camera/gallery image
+        try:
+            input_arr = preprocess_image(image)  # (1, 224, 224, 3)
+        except Exception as prep_err:
+            print(f"[Predict] Image preprocessing failed: {prep_err}")
+            return jsonify({
+                "error": "Image preprocessing failed.",
+                "status": "error",
+                "details": str(prep_err)
+            }), 500
 
-        # 2. Preprocess uploaded camera/gallery image and run real TensorFlow CNN inference
-        input_arr   = preprocess_image(image)              # (1, 224, 224, 3)
-        predictions = model.predict(input_arr, verbose=0)  # (1, 3) softmax probabilities
-        probs       = predictions[0]                        # (3,)
+        # 7. Run real TensorFlow CNN inference
+        try:
+            predictions = model.predict(input_arr, verbose=0)  # (1, 3) softmax probabilities
+            probs       = predictions[0]                        # (3,)
+        except Exception as inf_err:
+            print(f"[Predict] Model inference error: {inf_err}\n{traceback.format_exc()}")
+            return jsonify({
+                "error": "CNN model inference failed during prediction.",
+                "status": "error",
+                "details": str(inf_err)
+            }), 500
         
         # Sort predictions to evaluate top-1 vs top-2 class probabilities
         order              = np.argsort(probs)[::-1]
@@ -1500,8 +1623,18 @@ def predict():
         }
 
         # Retrieve dynamic recommendation based on stain and fabric context
-        rec = get_recommendation(predicted_label, fabric_context, image=image)
-        fabric_color = rec.get("fabric_color", "White Cotton")
+        try:
+            rec = get_recommendation(predicted_label, fabric_context, image=image)
+            fabric_color = rec.get("fabric_color", "White Cotton")
+        except Exception as rec_err:
+            print(f"[Predict] Recommendation retrieval warning: {rec_err}")
+            rec = {
+                "fabric_color": "White Cotton",
+                "steps": ["Apply mild detergent and rinse thoroughly with clean water."],
+                "caution": "Test cleaning agent on an inconspicuous area first.",
+                "materials": ["Clean Cloth", "Mild Liquid Detergent", "Water"]
+            }
+            fabric_color = "White Cotton"
 
         # ROBUST CONFIDENCE THRESHOLD & MARGIN / OUT-OF-DISTRIBUTION VALIDATION CHECK
         CONFIDENCE_THRESHOLD = 0.75  # 75% safe confidence threshold
@@ -1510,6 +1643,8 @@ def predict():
         is_low_confidence = (max_confidence < CONFIDENCE_THRESHOLD or confidence_percent < 75)
         is_narrow_margin  = (margin < MARGIN_THRESHOLD)
         is_unidentified   = is_low_confidence or is_narrow_margin or is_flat_surface or is_vivid_non_fabric
+
+        fallback_scan_id = "h_" + datetime.utcnow().strftime("%Y%m%d%H%M%S")
 
         if is_unidentified:
             unidentified_title = "Unidentified Stain"
@@ -1522,13 +1657,17 @@ def predict():
             else:
                 caution_message = f"Inconclusive Scan (<75%). Prediction confidence ({confidence_percent}%) is below the safety threshold. Please scan a clear, well-lit photo of a stained cotton garment."
 
-            metrics, scan_id = increment_scan_count(
-                stain_name="Unidentified",
-                fabric_name="Unidentified / N/A",
-                confidence=confidence_percent,
-                email=data.get("email"),
-                image=data.get("image", "")
-            )
+            scan_id = fallback_scan_id
+            try:
+                metrics, scan_id = increment_scan_count(
+                    stain_name="Unidentified",
+                    fabric_name="Unidentified / N/A",
+                    confidence=confidence_percent,
+                    email=user_email,
+                    image=data.get("image", "")
+                )
+            except Exception as scan_err:
+                print(f"[Predict] Warning: Failed to record unidentified scan: {scan_err}")
 
             print(f"Prediction overridden to Unidentified: conf={confidence_percent}%, margin={margin_percent}%, flat={is_flat_surface}, vivid={is_vivid_non_fabric} | Probs: {probabilities}")
 
@@ -1561,13 +1700,17 @@ def predict():
             })
 
         # Confident classification (>= 75% confidence, >= 25% margin, genuine stained fabric)
-        metrics, scan_id = increment_scan_count(
-            stain_name=predicted_label,
-            fabric_name=f"{fabric_color} (100%)",
-            confidence=confidence_percent,
-            email=data.get("email"),
-            image=data.get("image", "")
-        )
+        scan_id = fallback_scan_id
+        try:
+            metrics, scan_id = increment_scan_count(
+                stain_name=predicted_label,
+                fabric_name=f"{fabric_color} (100%)",
+                confidence=confidence_percent,
+                email=user_email,
+                image=data.get("image", "")
+            )
+        except Exception as scan_err:
+            print(f"[Predict] Warning: Failed to record confident scan: {scan_err}")
 
         print(f"Prediction successful (>=75%, margin={margin_percent}%): {predicted_raw} / {predicted_label} ({confidence_percent}% confidence) | "
               f"Fabric: {fabric_color} | Probs: {probabilities}")
@@ -1585,23 +1728,26 @@ def predict():
             "probabilities":        probabilities,
             "stain":                predicted_label,
             "fabric":               f"{fabric_color} (100%)",
-            "steps":                rec["steps"],
-            "caution":              rec["caution"],
-            "materials":            rec["materials"],
+            "steps":                rec.get("steps", []),
+            "caution":              rec.get("caution", ""),
+            "materials":            rec.get("materials", []),
             "recommendation": {
                 "id":           scan_id,
                 "status":       "success",
                 "is_classified": True,
-                "steps":        rec["steps"],
-                "caution":      rec["caution"],
-                "materials":    rec["materials"],
+                "steps":        rec.get("steps", []),
+                "caution":      rec.get("caution", ""),
+                "materials":    rec.get("materials", []),
                 "fabric_color": fabric_color
             }
         })
 
-    except Exception as e:
-        print(f"Inference error: {e}")
-        return jsonify({"error": f"Failed to process image: {str(e)}"}), 500
+    except Exception as unhandled_err:
+        print(f"[Predict] Unhandled exception in /predict: {unhandled_err}\n{traceback.format_exc()}")
+        return jsonify({
+            "error": f"An unexpected error occurred during prediction: {str(unhandled_err)}",
+            "status": "error"
+        }), 500
 
 if __name__ == "__main__":
     load_model(force_reload=True)
