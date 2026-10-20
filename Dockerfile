@@ -6,10 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PORT=5000
 
-# Install system dependencies (build-essential and libgomp1 are recommended for PyTorch)
+# Install system dependencies (build-essential, libgomp1, and libglib2.0-0 for OpenCV)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libgomp1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory inside the container
@@ -21,7 +22,7 @@ COPY requirements.txt .
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy web static assets, server file, and model weights
+# Copy web static assets, server file, model weights, and face detectors
 COPY server.py .
 COPY admin.html .
 COPY admin.js .
@@ -34,6 +35,8 @@ COPY stain_model.keras .
 COPY stainscan_model_v3_balanced.h5 .
 COPY stain_model.h5 .
 COPY stainscan_model.pth .
+COPY face_detection_yunet.onnx .
+COPY haarcascade_frontalface_default.xml .
 
 # Expose port (default 5000)
 EXPOSE 5000

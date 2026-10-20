@@ -27,7 +27,14 @@ from pymongo.errors import (
 )
 import certifi
 import numpy as np
-import cv2
+
+CV2_AVAILABLE = False
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except Exception as cv_err:
+    print(f"Warning: OpenCV (cv2) could not be loaded: {cv_err}")
+    cv2 = None
 
 IMAGE_SIZE           = (224, 224)                 # Exact match with MobileNetV2 input shape
 MODEL_PATH           = "stainscan_model_v3_balanced.keras"  # Primary retrained model file
@@ -42,7 +49,7 @@ try:
         "face_detection_yunet.onnx",
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "face_detection_yunet.onnx")
     ]
-    if hasattr(cv2, "FaceDetectorYN_create"):
+    if cv2 is not None and hasattr(cv2, "FaceDetectorYN_create"):
         for y_path in yunet_candidates:
             if os.path.exists(y_path):
                 FACE_DETECTOR_YN = cv2.FaceDetectorYN_create(
@@ -64,10 +71,10 @@ try:
     cascade_filename = "haarcascade_frontalface_default.xml"
     search_dirs = [
         os.path.dirname(os.path.abspath(__file__)),
-        getattr(getattr(cv2, "data", None), "haarcascades", ""),
+        getattr(getattr(cv2, "data", None), "haarcascades", "") if cv2 is not None else "",
         "."
     ]
-    if hasattr(cv2, "CascadeClassifier"):
+    if cv2 is not None and hasattr(cv2, "CascadeClassifier"):
         for s_dir in search_dirs:
             if s_dir:
                 candidate = os.path.join(s_dir, cascade_filename)
@@ -1780,32 +1787,40 @@ def predict():
                     "details": err_detail
                 }), 503
 
-        # Convert uploaded PIL image to OpenCV BGR format
-        cv_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        # Convert uploaded PIL image to OpenCV BGR format (if OpenCV is available)
+        cv_bgr = None
+        if CV2_AVAILABLE and cv2 is not None:
+            try:
+                cv_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+            except Exception as cv_conv_err:
+                print(f"[Predict] Warning converting PIL to OpenCV BGR: {cv_conv_err}")
+                cv_bgr = None
 
         # =========================================================
         # LAYER 1: OOD PRE-CHECK (OpenCV Skin & Face Filter)
         # =========================================================
         # a) YCrCb Human Skin Filter
         # Check human skin pixel ratios using bounds: lower [0, 133, 77], upper [255, 173, 127]
-        try:
-            cv_ycrcb = cv2.cvtColor(cv_bgr, cv2.COLOR_BGR2YCrCb)
-            lower_skin = np.array([0, 133, 77], dtype=np.uint8)
-            upper_skin = np.array([255, 173, 127], dtype=np.uint8)
-            raw_skin_mask = cv2.inRange(cv_ycrcb, lower_skin, upper_skin)
+        skin_ratio = 0.0
+        if cv_bgr is not None and cv2 is not None:
+            try:
+                cv_ycrcb = cv2.cvtColor(cv_bgr, cv2.COLOR_BGR2YCrCb)
+                lower_skin = np.array([0, 133, 77], dtype=np.uint8)
+                upper_skin = np.array([255, 173, 127], dtype=np.uint8)
+                raw_skin_mask = cv2.inRange(cv_ycrcb, lower_skin, upper_skin)
 
-            # Exclude near-white / neutral fabric highlights (Y > 215, S < 35)
-            # and require physiological skin saturation (S >= 70) to prevent
-            # warm-lit white/grey cotton and golden cooking oil from being falsely flagged as skin
-            hsv_img = cv2.cvtColor(cv_bgr, cv2.COLOR_BGR2HSV)
-            y_chan = cv_ycrcb[:, :, 0]
-            s_chan = hsv_img[:, :, 1]
-            is_fabric_highlight = (y_chan > 215) & (s_chan < 35)
-            skin_mask = (raw_skin_mask > 0) & (s_chan >= 70) & (~is_fabric_highlight)
-            skin_ratio = float(np.mean(skin_mask))
-        except Exception as skin_err:
-            print(f"[Predict] Skin filter warning: {skin_err}")
-            skin_ratio = 0.0
+                # Exclude near-white / neutral fabric highlights (Y > 215, S < 35)
+                # and require physiological skin saturation (S >= 70) to prevent
+                # warm-lit white/grey cotton and golden cooking oil from being falsely flagged as skin
+                hsv_img = cv2.cvtColor(cv_bgr, cv2.COLOR_BGR2HSV)
+                y_chan = cv_ycrcb[:, :, 0]
+                s_chan = hsv_img[:, :, 1]
+                is_fabric_highlight = (y_chan > 215) & (s_chan < 35)
+                skin_mask = (raw_skin_mask > 0) & (s_chan >= 70) & (~is_fabric_highlight)
+                skin_ratio = float(np.mean(skin_mask))
+            except Exception as skin_err:
+                print(f"[Predict] Skin filter warning: {skin_err}")
+                skin_ratio = 0.0
 
         if skin_ratio > 0.35:
             rejection_msg = "Scan rejected: Human skin detected. Please scan a cotton fabric stain."
@@ -1867,7 +1882,7 @@ def predict():
         # b) Face Filter (YuNet Deep Face Detector + Haar Cascade Fallback)
         face_detected = False
         face_score = 0.0
-        if FACE_DETECTOR_YN is not None:
+        if cv_bgr is not None and FACE_DETECTOR_YN is not None:
             try:
                 h_img, w_img = cv_bgr.shape[:2]
                 FACE_DETECTOR_YN.setInputSize((w_img, h_img))
@@ -1882,7 +1897,7 @@ def predict():
             except Exception as yn_err:
                 print(f"[Predict] YuNet face detection warning: {yn_err}")
 
-        if not face_detected and FACE_CASCADE is not None:
+        if not face_detected and cv_bgr is not None and FACE_CASCADE is not None and cv2 is not None:
             try:
                 cv_gray = cv2.cvtColor(cv_bgr, cv2.COLOR_BGR2GRAY)
                 h, w = cv_gray.shape[:2]

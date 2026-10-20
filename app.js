@@ -12,7 +12,7 @@ const LIVE_RENDER_BACKEND = "https://stainscan-backend-gmbw.onrender.com";
 
 function resolveApiBaseUrl() {
     try {
-        // 1. Allow manual override via localStorage if tester sets it
+        // 1. Allow manual override via localStorage if developer/tester sets it
         const savedBackend = localStorage.getItem("stainscan_backend_url");
         if (savedBackend) return savedBackend;
 
@@ -22,28 +22,29 @@ function resolveApiBaseUrl() {
             const host = window.location.hostname;
             const port = window.location.port;
 
-            // If accessed via web browser served from this PC (localhost, 127.0.0.1, or local LAN IP 192.168.1.56)
-            if (host === "localhost" || host === "127.0.0.1" || host === LOCAL_PC_LAN_IP || port === "5000") {
+            // If accessed via local development browser (localhost, 127.0.0.1, or local LAN IP on port 5000)
+            if (host === "localhost" || host === "127.0.0.1" || (host === LOCAL_PC_LAN_IP && port === "5000") || (host.startsWith("192.168.") && port === "5000")) {
                 return window.location.origin;
             }
 
-            // If running inside mobile APK, WebView, or Capacitor/Cordova (file://, capacitor://, ionic://, content://)
-            if (proto === "file:" || proto === "capacitor:" || proto === "ionic:" || proto === "content:" || !host) {
-                return LOCAL_PC_BACKEND;
+            // If accessed directly on Render web domain
+            if (host.includes("onrender.com")) {
+                return window.location.origin;
             }
         }
     } catch (e) {
-        console.warn("Could not determine dynamic API base URL, falling back to LOCAL_PC_BACKEND:", e);
+        console.warn("Could not determine dynamic API base URL, falling back to LIVE_RENDER_BACKEND:", e);
     }
 
-    // Default to the local PC backend for testing and physical phone connectivity
-    return LOCAL_PC_BACKEND;
+    // Default to live Render cloud backend for packaged Android APK (file://, WebView, Capacitor)
+    // ensuring 24/7 online availability connected to Render and MongoDB Atlas anywhere.
+    return LIVE_RENDER_BACKEND;
 }
 
 const CONFIG = {
     LOCAL_BACKEND: LOCAL_PC_BACKEND,
     CLOUD_BACKEND: LIVE_RENDER_BACKEND,
-    // Dynamically resolves to http://192.168.1.56:5000, current server origin, or cloud fallback
+    // Strictly routes packaged APK to live 24/7 Render cloud backend, and local browser to localhost
     API_BASE_URL: resolveApiBaseUrl()
 };
 

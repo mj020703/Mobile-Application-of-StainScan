@@ -1,17 +1,17 @@
 {
   "_id": "app_metrics",
-  "total_scans": 38,
-  "total_cnn_scans_run": 37,
-  "totalScansCount": 37,
-  "successful_treatments": 3,
-  "totalTreatedCount": 3,
-  "total_users": 3,
-  "registered_mobile_users": 3,
-  "totalUsersCount": 3,
+  "total_scans": 114,
+  "total_cnn_scans_run": 113,
+  "totalScansCount": 113,
+  "successful_treatments": 4,
+  "totalTreatedCount": 4,
+  "total_users": 4,
+  "registered_mobile_users": 4,
+  "totalUsersCount": 4,
   "stain_counts": {
-    "Used Cooking Oil": 7,
-    "Black Ballpen Ink": 4,
-    "Mud": 10
+    "Used Cooking Oil": 15,
+    "Black Ballpen Ink": 10,
+    "Mud": 42
   },
   "database_source": "mongodb_atlas",
   "is_live": true,
