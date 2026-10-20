@@ -6,8 +6,24 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="StainScan">
     <meta name="theme-color" content="#070a13">
     <title>StainScan Mobile App</title>
+    <!-- Web App Manifest for Native Home Screen Installation -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="stainscan_logo.png">
+    <link rel="icon" type="image/png" href="stainscan_logo.png">
+    <!-- Global Fail-safe Network & Error Trap (Prevents WebView Host Navigation Faults) -->
+    <script>
+        window.onerror = function(msg, url, line) {
+            console.warn("Handled window error:", msg, url, line);
+            return true;
+        };
+        window.onunhandledrejection = function(e) {
+            console.warn("Handled unhandled rejection:", e.reason);
+            if (e && e.preventDefault) e.preventDefault();
+        };
+    </script>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -577,6 +593,15 @@
                 setTimeout(function() { splash.style.display = "none"; }, 450);
             }
         }, 5000);
+
+        // Service Worker registration for PWA installability and cache reliability
+        if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+            window.addEventListener('load', function() {
+                navigator.serviceWorker.register('sw.js').catch(function(err) {
+                    console.log('ServiceWorker registration skipped:', err);
+                });
+            });
+        }
     </script>
 </body>
 </html>

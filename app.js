@@ -645,9 +645,21 @@ class DataStore {
     }
 
     static saveHistory(hist, email) {
-        const user = email || (JSON.parse(sessionStorage.getItem("stainscan_current_user")) || {}).email;
-        if (!user) return;
-        localStorage.setItem(`stainscan_history_${user}`, JSON.stringify(hist));
+        try {
+            const user = email || (JSON.parse(sessionStorage.getItem("stainscan_current_user")) || {}).email;
+            if (!user) return;
+            // Clean/sanitize history: keep item lightweight to prevent QuotaExceededError in mobile localStorage
+            const cleanHist = (hist || []).slice(0, 10).map(item => {
+                const copy = Object.assign({}, item);
+                if (copy.image && copy.image.length > 300) {
+                    copy.image = ""; // Avoid storing multi-megabyte base64 strings in localStorage
+                }
+                return copy;
+            });
+            localStorage.setItem(`stainscan_history_${user}`, JSON.stringify(cleanHist));
+        } catch (e) {
+            console.warn("Could not save history to localStorage:", e);
+        }
     }
 
     static async updateScanStatusCloud(scanId, status) {
@@ -1411,6 +1423,12 @@ document.addEventListener("DOMContentLoaded", () => {
             if (resultProcedureCard) resultProcedureCard.style.display = "none";
             if (btnViewCleaningGuide) btnViewCleaningGuide.style.display = "none";
 
+            // Immediately display uncertainty card & toast for instant user feedback
+            resultsCard.style.display = "block";
+            showToast(I18N.currentLang === "hil"
+                ? "Pahibalo: Ang gin-scan indi makilal-an nga tela nga bulak (<85%)."
+                : "Item is not recognized as a stained cotton fabric (Confidence < 85%).", "warning");
+
             const serverAssignedId = (recommendation && recommendation.id) ? recommendation.id : null;
             scanResultData = {
                 id: serverAssignedId || ("h_" + Date.now()),
@@ -1428,23 +1446,17 @@ document.addEventListener("DOMContentLoaded", () => {
                 materials: [],
                 timestamp: new Date().toISOString(),
                 status: "Pending",
-                image: selectedImageBase64 || ""
+                image: ""
             };
 
-            // Save low-confidence / OOD scan to history as "Unidentified Object"
-            const localHist = DataStore.getHistory();
-            localHist.unshift(scanResultData);
-            DataStore.saveHistory(localHist.slice(0, 10));
-
-            if (!serverAssignedId) {
-                DataStore.saveHistoryCloud(scanResultData);
+            // Save low-confidence / OOD scan to local history safely
+            try {
+                const localHist = DataStore.getHistory();
+                localHist.unshift(scanResultData);
+                DataStore.saveHistory(localHist.slice(0, 10));
+            } catch (saveErr) {
+                console.warn("Could not persist OOD scan locally:", saveErr);
             }
-
-            DataStore.addLog("warning", `OOD guardrail triggered: Unidentified Object (${confNum}% confidence < 85%)`);
-            resultsCard.style.display = "block";
-            showToast(I18N.currentLang === "hil"
-                ? "Pahibalo: Ang gin-scan indi makilal-an nga tela nga bulak (<85%)."
-                : "Item is not recognized as a stained cotton fabric (Confidence < 85%).", "warning");
             return;
         }
 
@@ -1543,18 +1555,18 @@ document.addEventListener("DOMContentLoaded", () => {
             if (btnViewCleaningGuide) btnViewCleaningGuide.style.display = "inline-flex";
         }
 
-        // Save scan locally for user's history tab
-        const localHist = DataStore.getHistory();
-        localHist.unshift(scanResultData);
-        DataStore.saveHistory(localHist.slice(0, 10));
-
-        if (!serverAssignedId) {
-            DataStore.saveHistoryCloud(scanResultData);
-        }
-        DataStore.addLog("info", `Successful CNN scan: ${stain} on ${fabric} (${confNum}% confidence)`);
-
+        // Immediately display results card & toast for instant user feedback
         resultsCard.style.display = "block";
         showToast(I18N.currentLang === "hil" ? "Tapos na ang Pag-scan sang Tela!" : "Fabric Scan Complete!");
+
+        // Save scan locally for user's history tab safely
+        try {
+            const localHist = DataStore.getHistory();
+            localHist.unshift(scanResultData);
+            DataStore.saveHistory(localHist.slice(0, 10));
+        } catch (saveErr) {
+            console.warn("Could not persist scan locally:", saveErr);
+        }
     }
 
     function processScanningFailure(errorMessage) {

@@ -1,0 +1,19 @@
+{
+  "name": "StainScan Mobile App",
+  "short_name": "StainScan",
+  "description": "AI-Powered Cotton Fabric Stain Care & Identification",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#070a13",
+  "theme_color": "#070a13",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "stainscan_logo.png",
+      "sizes": "192x192 512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
