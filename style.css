@@ -2870,11 +2870,17 @@ input:checked + .slider:before {
 
 
 
-/* Inconclusive badge variant */
+/* Inconclusive & OOD warning badge variants */
 .results-badge.inconclusive {
     background: rgba(245, 158, 11, 0.16) !important;
     border-color: rgba(245, 158, 11, 0.35) !important;
     color: #f59e0b !important;
+}
+
+.results-badge.warning {
+    background: rgba(239, 68, 68, 0.16) !important;
+    border-color: rgba(239, 68, 68, 0.35) !important;
+    color: #ef4444 !important;
 }
 
 .confidence-bar.warning {

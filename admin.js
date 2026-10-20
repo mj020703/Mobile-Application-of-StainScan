@@ -283,19 +283,22 @@ document.addEventListener("DOMContentLoaded", () => {
     async function updateDbStatusBadge() {
         const dbBadge = document.getElementById("dbStatusBadge");
         if (!dbBadge) return;
-        const status = await AdminDataStore.getDbStatus();
-        if (status && status.is_connected && !status.is_demo_mode) {
-            dbBadge.innerHTML = `<i class="fas fa-database" style="color:#10b981;"></i> <span>MongoDB Atlas: <strong>Live</strong></span>`;
+        const data = await AdminDataStore.getDbStatus();
+        if (data && data.is_connected && !data.is_demo_mode) {
+            dbBadge.innerHTML = `<i class="fas fa-database" style="color:#10b981;"></i> <span>Database: <strong>MongoDB Atlas (Live)</strong></span>`;
             dbBadge.style.borderColor = "rgba(16, 185, 129, 0.4)";
             dbBadge.style.color = "#10b981";
-            dbBadge.title = `Connected to MongoDB Atlas cluster '${status.database_name}'. Live collections: users (${status.collections?.users || 0}), scans (${status.collections?.scans || 0}), metrics (${status.collections?.metrics || 0})`;
-        } else if (status && status.status === "fallback_mode") {
+            dbBadge.title = `Connected to MongoDB Atlas cluster '${data.database_name || "stainscan_db"}'. Live collections: users (${data.collections?.users || 0}), scans (${data.collections?.scans || 0}), metrics (${data.collections?.metrics || 0})`;
+            dbBadge.style.cursor = "default";
+        } else if (data && data.status === "fallback_mode") {
+            const reasonMsg = data.last_error || "MONGO_URI not configured or unreachable; using local scans.json and users.json";
             dbBadge.innerHTML = `<i class="fas fa-database" style="color:#f59e0b;"></i> <span>Database: <strong>Fallback Mode (Local JSON)</strong></span>`;
             dbBadge.style.borderColor = "rgba(245, 158, 11, 0.4)";
             dbBadge.style.color = "#f59e0b";
-            dbBadge.title = "MONGO_URI not configured or unreachable; using local scans.json and users.json";
+            dbBadge.title = reasonMsg;
+            dbBadge.style.cursor = "help";
         } else {
-            dbBadge.innerHTML = `<i class="fas fa-triangle-exclamation" style="color:#ef4444;"></i> <span>Backend: <strong>Connecting...</strong></span>`;
+            dbBadge.innerHTML = `<i class="fas fa-triangle-exclamation" style="color:#ef4444;"></i> <span>Database: <strong>Connecting...</strong></span>`;
             dbBadge.style.borderColor = "rgba(239, 68, 68, 0.4)";
             dbBadge.style.color = "#ef4444";
         }
@@ -566,6 +569,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 2500);
 
     // Initial check
+    updateDbStatusBadge();
     if (currentAdmin) {
         authContainer.classList.remove("active");
         mainContainer.style.display = "flex";

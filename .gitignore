@@ -26,4 +26,10 @@ DataSet/
 !stainscan_logo.png
 !sample_data_urls.js
 !samples/*.jpg
-.vscode/
+.vscode/
+
+# Local Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+

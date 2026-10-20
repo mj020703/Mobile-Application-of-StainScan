@@ -88,18 +88,21 @@ for name, img in samples.items():
     caution = res.get("caution", "")
     
     is_non_stain = name.startswith("Non-Stain")
+    stain_type = res.get("stain_type", "")
+    is_valid_fabric = res.get("is_valid_fabric")
+
     if is_non_stain:
-        if status != "Unidentified" or stain != "Unidentified Stain":
+        if status != "Unidentified" or stain_type != "Unidentified Object" or is_valid_fabric is not False:
             all_passed = False
-            flag = "[FAIL - Not Rejected]"
+            flag = f"[FAIL - Expected Unidentified Object, got stain_type={stain_type}, is_valid_fabric={is_valid_fabric}]"
         else:
-            flag = "[PASS - Rejected]"
+            flag = "[PASS - Rejected as Unidentified Object]"
     else:
-        if status != "success" or res.get("is_classified") is not True:
+        if status != "success" or res.get("is_classified") is not True or is_valid_fabric is not True:
             all_passed = False
-            flag = "[FAIL - Stained Image Rejected]"
+            flag = f"[FAIL - Stained Image Rejected: status={status}, is_valid_fabric={is_valid_fabric}]"
         else:
-            flag = "[PASS - Classified]"
+            flag = "[PASS - Classified Valid Fabric]"
             
     print(f"{name:<30} {status:<14} {stain:<22} {conf:<12} {flag} {caution[:35]}")
 

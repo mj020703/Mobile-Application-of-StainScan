@@ -1,8 +1,17 @@
+import sys
+import functools
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+# Ensure immediate flush for real-time terminal and log monitoring
+print = functools.partial(print, flush=True)
 import base64
 from io import BytesIO
 import json
 import os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+os.environ["PYTHONIOENCODING"] = "utf-8"
 from datetime import datetime
 import traceback
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -18,11 +27,41 @@ from pymongo.errors import (
 )
 import certifi
 import numpy as np
+import cv2
 
-IMAGE_SIZE   = (224, 224)                 # Exact match with MobileNetV2 input shape
-MODEL_PATH   = "stainscan_model_v3_balanced.keras"  # Primary retrained model file
-LOADED_MODEL_FILE = None
-LAST_MODEL_ERROR = None
+IMAGE_SIZE           = (224, 224)                 # Exact match with MobileNetV2 input shape
+MODEL_PATH           = "stainscan_model_v3_balanced.keras"  # Primary retrained model file
+CONFIDENCE_THRESHOLD = 0.85                       # Strict 85% confidence threshold for Out-of-Distribution guardrail
+LOADED_MODEL_FILE    = None
+LAST_MODEL_ERROR     = None
+
+# Initialize Haar cascade face detector if available
+FACE_CASCADE = None
+try:
+    cascade_filename = "haarcascade_frontalface_default.xml"
+    search_dirs = [
+        os.path.dirname(os.path.abspath(__file__)),
+        getattr(getattr(cv2, "data", None), "haarcascades", ""),
+        "."
+    ]
+    if hasattr(cv2, "CascadeClassifier"):
+        for s_dir in search_dirs:
+            if s_dir:
+                candidate = os.path.join(s_dir, cascade_filename)
+                if os.path.exists(candidate):
+                    clf = cv2.CascadeClassifier(candidate)
+                    if not clf.empty():
+                        FACE_CASCADE = clf
+                        print(f"Haar cascade face detector loaded successfully from '{candidate}'.")
+                        break
+        if FACE_CASCADE is None:
+            clf = cv2.CascadeClassifier(cascade_filename)
+            if not clf.empty():
+                FACE_CASCADE = clf
+except Exception as face_init_err:
+    print(f"Warning: Haar cascade face detector initialization: {face_init_err}")
+    FACE_CASCADE = None
+
 CLASS_MAPPING_RAW = {
     0: "ballpen ink_cotton",
     1: "Cooking Oil_cotton",
@@ -65,13 +104,56 @@ CORS(
 )
 
 @app.before_request
-def handle_preflight_options():
+def handle_preflight_and_log():
+    # Handle CORS preflight requests
     if request.method == "OPTIONS":
         response = app.make_default_options_response()
         response.headers["Access-Control-Allow-Origin"] = "*"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
         return response
+
+    path = request.path
+    # Ignore noisy static asset requests (css, js, images, favicon)
+    if any(path.endswith(ext) for ext in [".css", ".js", ".png", ".jpg", ".ico", ".svg", ".woff", ".woff2"]) and not path.startswith("/api/"):
+        return
+
+    # Extract client IP and device information
+    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1")
+    if "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
+    user_agent = request.headers.get("User-Agent", "Unknown Device")
+    origin = request.headers.get("Origin") or request.headers.get("Referer") or "Direct Request"
+
+    # Log incoming mobile API endpoints with high visibility
+    if path.startswith("/api/") or path == "/predict" or path == "/health":
+        payload_summary = ""
+        if request.is_json:
+            try:
+                data = request.get_json(silent=True) or {}
+                sanitized = {}
+                for k, v in data.items():
+                    if k in ["image", "photo", "file"] and isinstance(v, str) and len(v) > 80:
+                        sanitized[k] = f"<Base64 Image Data: {len(v):,} characters>"
+                    elif k in ["password"]:
+                        sanitized[k] = "••••••••"
+                    else:
+                        sanitized[k] = v
+                payload_summary = json.dumps(sanitized)
+            except Exception:
+                payload_summary = "<unparseable json payload>"
+        elif request.args:
+            payload_summary = f"Query: {dict(request.args)}"
+
+        print(f"\n{'='*75}")
+        print(f"[INCOMING MOBILE / API REQUEST] {request.method} {path}")
+        print(f"   * Client IP : {client_ip}")
+        print(f"   * Origin    : {origin}")
+        print(f"   * User-Agent: {user_agent[:90]}")
+        if payload_summary:
+            print(f"   * Payload   : {payload_summary}")
+        print(f"{'='*75}\n")
 
 @app.after_request
 def add_cors_headers(response):
@@ -225,39 +307,78 @@ DEFAULT_KB = {
     "Mud": RECOMMENDATION_DATABASE["mud"]["white"]
 }
 
+# Configure dnspython DNS resolver fallback for Windows local environments
+try:
+    import dns.resolver
+    _default_resolver = dns.resolver.get_default_resolver()
+    if _default_resolver:
+        for _ns in ["8.8.8.8", "1.1.1.1"]:
+            if _ns not in _default_resolver.nameservers:
+                _default_resolver.nameservers.append(_ns)
+except Exception:
+    pass
+
 # Load .env file automatically if present in workspace
 def load_env_file():
+    # 1. Attempt standard python-dotenv first if installed
+    try:
+        from dotenv import load_dotenv
+        for candidate in [".env", ".env.local"]:
+            p1 = os.path.join(os.path.dirname(os.path.abspath(__file__)), candidate)
+            if os.path.exists(p1):
+                load_dotenv(p1, override=True)
+            p2 = os.path.join(os.getcwd(), candidate)
+            if os.path.exists(p2):
+                load_dotenv(p2, override=True)
+    except Exception:
+        pass
+
+    # 2. Resilient manual parser fallback in case dotenv is unavailable
     env_paths = [
         os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"),
-        os.path.join(os.getcwd(), ".env")
+        os.path.join(os.getcwd(), ".env"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.local"),
+        os.path.join(os.getcwd(), ".env.local")
     ]
+    loaded = False
     for env_path in env_paths:
         if os.path.exists(env_path):
             try:
                 with open(env_path, "r", encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
+                        if line.startswith("export "):
+                            line = line[7:].strip()
                         if line and not line.startswith("#") and "=" in line:
                             k, v = line.split("=", 1)
                             k = k.strip()
                             v = v.strip().strip("'\"")
-                            if k and not os.environ.get(k):
+                            if k and (k not in os.environ or not os.environ[k]):
                                 os.environ[k] = v
                 print(f"Loaded environment variables from '{env_path}'.")
+                loaded = True
                 break
             except Exception as e:
                 print(f"Notice: Failed to load .env file '{env_path}': {e}")
+    if not loaded:
+        print("Notice: No local .env file found. Checking system environment variables.")
 
 load_env_file()
 
 # Initialize MongoDB Connection & Resilient Database Handling
-MONGO_URI = os.environ.get("MONGO_URI") or os.environ.get("MONGODB_URI") or os.environ.get("DATABASE_URL") or ""
-MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "stainscan_db")
+MONGO_URI = (
+    os.environ.get("MONGO_URI") or 
+    os.environ.get("MONGODB_URI") or 
+    os.environ.get("DATABASE_URL") or 
+    ""
+).strip()
+MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "stainscan_db").strip()
 
 client = None
 db = None
 is_demo_mode = True
 _last_connect_attempt = 0
+LAST_MONGO_ERROR = None
 
 SCANS_FILE = "scans.json"
 METRICS_FILE = "metrics.json"
@@ -317,10 +438,11 @@ def _save_scans_file():
 def create_mongo_client(uri):
     """
     Creates a robust PyMongo MongoClient instance optimized for Atlas cloud clusters
-    and graceful mobile network reconnection (socket timeouts, idle connection closing, TLS).
+    and graceful network reconnection (socket timeouts, idle connection closing, TLS).
     """
-    formatted_uri = uri
-    if "tlsAllowInvalidCertificates" not in formatted_uri:
+    formatted_uri = uri.strip()
+    # Check if TLS certificate bypass is needed
+    if "tlsallowinvalidcertificates" not in formatted_uri.lower():
         separator = "&" if "?" in formatted_uri else "?"
         formatted_uri = f"{formatted_uri}{separator}tlsAllowInvalidCertificates=true"
 
@@ -330,7 +452,7 @@ def create_mongo_client(uri):
         ca_cert = None
 
     client_options = {
-        "serverSelectionTimeoutMS": 5000,
+        "serverSelectionTimeoutMS": 6000,
         "connectTimeoutMS": 10000,
         "socketTimeoutMS": 20000,
         "maxIdleTimeMS": 45000,          # Close idle sockets before Atlas drops them
@@ -339,7 +461,7 @@ def create_mongo_client(uri):
         "tls": True,
         "tlsAllowInvalidCertificates": True
     }
-    if ca_cert:
+    if ca_cert and os.path.exists(ca_cert):
         client_options["tlsCAFile"] = ca_cert
 
     return MongoClient(formatted_uri, **client_options)
@@ -349,15 +471,30 @@ def init_mongodb():
     Establishes connection to MongoDB Atlas, verifies ping, and initializes
     default knowledge base and admin collections.
     """
-    global client, db, is_demo_mode, _last_connect_attempt
+    global client, db, is_demo_mode, _last_connect_attempt, LAST_MONGO_ERROR
+    global MONGO_URI, MONGO_DB_NAME
     import time
     _last_connect_attempt = time.time()
 
-    if not MONGO_URI:
-        print("MONGO_URI not configured. Running in local resilient fallback mode.")
+    # Re-evaluate MONGO_URI from environment variables in case .env was modified
+    current_uri = (
+        os.environ.get("MONGO_URI") or 
+        os.environ.get("MONGODB_URI") or 
+        os.environ.get("DATABASE_URL") or 
+        MONGO_URI or 
+        ""
+    ).strip()
+
+    if not current_uri:
+        LAST_MONGO_ERROR = "MONGO_URI is not set. Add your MongoDB Atlas connection string to .env (see .env.example)."
+        print("Notice: MONGO_URI not configured. Running in local resilient fallback mode (Local JSON).")
         is_demo_mode = True
         db = None
         return None
+
+    MONGO_URI = current_uri
+    if not MONGO_DB_NAME:
+        MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "stainscan_db").strip() or "stainscan_db"
 
     try:
         if client is not None:
@@ -372,6 +509,7 @@ def init_mongodb():
         client = new_client
         db = client[MONGO_DB_NAME]
         is_demo_mode = False
+        LAST_MONGO_ERROR = None
         print(f"Connected to MongoDB Atlas successfully (DB: {MONGO_DB_NAME}).")
 
         # Populate Default Knowledge Base if collection is empty
@@ -395,6 +533,7 @@ def init_mongodb():
 
         return db
     except Exception as e:
+        LAST_MONGO_ERROR = str(e)
         print(f"Notice: MongoDB Atlas connection error ({e}). Running in resilient fallback mode.")
         db = None
         is_demo_mode = True
@@ -408,11 +547,12 @@ def get_db():
     global client, db, is_demo_mode, _last_connect_attempt
     import time
 
-    if not MONGO_URI:
-        return None
-
     if db is not None:
         return db
+
+    current_uri = os.environ.get("MONGO_URI") or os.environ.get("MONGODB_URI") or os.environ.get("DATABASE_URL") or MONGO_URI or ""
+    if not current_uri.strip():
+        return None
 
     # Throttle reconnect attempts to once every 10 seconds to avoid blocking requests
     if time.time() - _last_connect_attempt > 10:
@@ -467,22 +607,62 @@ def get_metrics():
         # Count live mobile users from 'users' collection
         mobile_users = d["users"].count_documents({"$or": [{"role": "user"}, {"role": {"$ne": "admin"}}]})
 
-        if doc:
-            doc["_id"] = str(doc["_id"])
-            doc["total_users"] = mobile_users
-            doc["registered_mobile_users"] = mobile_users
-            doc["totalUsersCount"] = mobile_users
-            doc["database_source"] = "mongodb_atlas"
-            doc["is_live"] = True
-            return doc
-
-        # 2. If no metrics document exists yet, aggregate live counts directly from MongoDB collections
+        # Count live scans and treated scans directly from 'scans' collection
         total_scans = d["scans"].count_documents({})
         treated_count = d["scans"].count_documents({"status": "Treated"})
         oil_count = d["scans"].count_documents({"stain": "Used Cooking Oil"})
         ink_count = d["scans"].count_documents({"stain": "Black Ballpen Ink"})
         mud_count = d["scans"].count_documents({"stain": "Mud"})
 
+        if doc:
+            doc["_id"] = str(doc["_id"])
+            doc["total_users"] = mobile_users
+            doc["registered_mobile_users"] = mobile_users
+            doc["totalUsersCount"] = mobile_users
+
+            # Sync total scans (respecting any higher historical counter)
+            max_scans = max(int(doc.get("total_scans", 0)), total_scans)
+            doc["total_scans"] = max_scans
+            doc["total_cnn_scans_run"] = max_scans
+            doc["totalScansCount"] = max_scans
+
+            # Sync treated scans directly with live database collection
+            max_treated = max(int(doc.get("successful_treatments", 0)), treated_count)
+            doc["successful_treatments"] = max_treated
+            doc["totalTreatedCount"] = max_treated
+
+            # Sync stain distribution
+            stain_counts = doc.setdefault("stain_counts", {})
+            stain_counts["Used Cooking Oil"] = max(stain_counts.get("Used Cooking Oil", 0), oil_count)
+            stain_counts["Black Ballpen Ink"] = max(stain_counts.get("Black Ballpen Ink", 0), ink_count)
+            stain_counts["Mud"] = max(stain_counts.get("Mud", 0), mud_count)
+
+            doc["database_source"] = "mongodb_atlas"
+            doc["is_live"] = True
+            doc["status"] = "ok"
+
+            # Persist updated synchronized numbers back to MongoDB Atlas 'metrics' collection
+            d["metrics"].update_one(
+                {"_id": "app_metrics"},
+                {"$set": {
+                    "total_users": mobile_users,
+                    "registered_mobile_users": mobile_users,
+                    "totalUsersCount": mobile_users,
+                    "total_scans": max_scans,
+                    "total_cnn_scans_run": max_scans,
+                    "totalScansCount": max_scans,
+                    "successful_treatments": max_treated,
+                    "totalTreatedCount": max_treated,
+                    "stain_counts": stain_counts,
+                    "database_source": "mongodb_atlas",
+                    "is_live": True,
+                    "status": "ok"
+                }},
+                upsert=True
+            )
+            return doc
+
+        # 2. If no metrics document exists yet, aggregate live counts directly from MongoDB collections
         computed = {
             "_id": "app_metrics",
             "total_scans": total_scans,
@@ -551,12 +731,12 @@ def increment_scan_count(stain_name=None, fabric_name=None, confidence=None, ema
     metrics["total_scans"] = metrics.get("total_scans", 0) + 1
 
     conf_num = int(confidence or 0)
-    # Strictly enforce 70% confidence threshold: override stain to Unidentified and fabric to Unidentified / N/A if below 70%
-    if conf_num < 70:
-        stain_name = "Unidentified"
+    # Strictly enforce 85% confidence threshold: override stain to Unidentified Object and fabric to Unidentified / N/A if below 85%
+    if conf_num < 85 or stain_name in ["Unidentified", "Unidentified Object", "Unidentified Stain"]:
+        stain_name = "Unidentified Object"
         fabric_name = "Unidentified / N/A"
 
-    if stain_name and stain_name != "Unidentified":
+    if stain_name and stain_name not in ["Unidentified", "Unidentified Object", "Unidentified Stain"]:
         stain_counts = metrics.setdefault("stain_counts", {})
         stain_counts[stain_name] = stain_counts.get(stain_name, 0) + 1
 
@@ -567,8 +747,10 @@ def increment_scan_count(stain_name=None, fabric_name=None, confidence=None, ema
     new_scan = {
         "id": scan_id,
         "email": email or "mobile_user@stainscan.com",
-        "stain": stain_name or "Unidentified",
-        "fabric": fabric_name or ("Unidentified / N/A" if conf_num < 70 else "Cotton Fabric (100%)"),
+        "stain": stain_name or "Unidentified Object",
+        "stain_type": stain_name or "Unidentified Object",
+        "is_valid_fabric": conf_num >= 85 and stain_name not in ["Unidentified", "Unidentified Object", "Unidentified Stain"],
+        "fabric": fabric_name or ("Unidentified / N/A" if conf_num < 85 else "Cotton Fabric (100%)"),
         "confidence": conf_num,
         "timestamp": datetime.utcnow().isoformat(),
         "status": "Pending",
@@ -576,8 +758,8 @@ def increment_scan_count(stain_name=None, fabric_name=None, confidence=None, ema
     }
     try:
         add_scan(new_scan)
-        if conf_num < 70:
-            add_log("warning", f"CNN Scan #{metrics['total_scans']} below 70% threshold: Unidentified ({conf_num}%)")
+        if conf_num < 85:
+            add_log("warning", f"CNN Scan #{metrics['total_scans']} below 85% threshold: Unidentified Object ({conf_num}%)")
         else:
             add_log("info", f"CNN Scan #{metrics['total_scans']} classified: {stain_name} ({conf_num}%)")
     except Exception as e:
@@ -734,12 +916,15 @@ def get_scans(email=None, limit=None, include_images=True):
     return execute_db_operation(_op, fallback_fn=_fb)
 
 def add_scan(scan):
-    # Enforce 75% confidence persistence check
+    # Enforce 85% confidence persistence check
     conf_val = scan.get("confidence")
     if conf_val is not None:
         try:
-            if int(conf_val) < 75 or scan.get("stain") in ["Unidentified", "Unidentified Stain", "Unknown"]:
-                scan["stain"] = "Unidentified"
+            if int(conf_val) < 85 or scan.get("stain") in ["Unidentified", "Unidentified Object", "Unidentified Stain", "Unknown"]:
+                if scan.get("stain") not in ["Unidentified", "Unidentified Object", "Unidentified Stain"]:
+                    scan["stain"] = "Unidentified Object"
+                scan["stain_type"] = scan.get("stain_type") or "Unidentified Object"
+                scan["is_valid_fabric"] = False
                 scan["fabric"] = "Unidentified / N/A"
         except (ValueError, TypeError):
             pass
@@ -857,6 +1042,8 @@ def api_register():
         
         saved_user = add_user(new_user)
         add_log("info", f"New user registered: {email}")
+        client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
+        print(f"[OK] [API REGISTER] Successfully saved user to database: '{email}' | Name: '{name}' | IP: {client_ip}")
         
         user_name = saved_user.get("name", name) if isinstance(saved_user, dict) else name
         user_email = saved_user.get("email", email) if isinstance(saved_user, dict) else email
@@ -871,7 +1058,7 @@ def api_register():
         }), 201
 
     except Exception as e:
-        print(f"Error during registration: {e}")
+        print(f"[ERROR] [API REGISTER] Error during registration: {e}")
         return jsonify({"error": "A server error occurred during registration. Please try again."}), 500
 
 @app.route("/api/login", methods=["POST", "OPTIONS"])
@@ -894,6 +1081,7 @@ def api_login():
         
         email = str(raw_email).strip().lower()
         password = str(raw_password)
+        client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
         
         if not email or not password:
             return jsonify({"error": "Email address and password cannot be blank."}), 400
@@ -901,6 +1089,7 @@ def api_login():
         user = find_user_by_email(email)
         if user and str(user.get("password", "")) == password:
             add_log("info", f"User login successful: {email}")
+            print(f"[OK] [API LOGIN SUCCESS] User authenticated: '{email}' | Role: {user.get('role', 'user')} | IP: {client_ip}")
             return jsonify({
                 "name": user.get("name", "User"),
                 "email": user.get("email", email),
@@ -909,6 +1098,7 @@ def api_login():
             }), 200
         
         add_log("warning", f"Failed login attempt for: {email}")
+        print(f"[WARN] [API LOGIN FAILED] Invalid credentials for: '{email}' | IP: {client_ip}")
         return jsonify({"error": "Invalid email credentials or password"}), 401
 
     except Exception as e:
@@ -974,13 +1164,18 @@ def api_scans():
 
         saved_scan = add_scan(new_scan)
         add_log("info", f"New stain scan logged for: {new_scan['email']} ({new_scan['stain']})")
+        client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
+        print(f"[SCAN] [API SCANS POST] Mobile scan recorded in database: User='{new_scan['email']}' | Stain='{new_scan['stain']}' | Conf={new_scan['confidence']}% | Fabric='{new_scan['fabric']}' | IP={client_ip}")
         return jsonify(saved_scan), 201
         
     email = request.args.get("email")
     limit = request.args.get("limit", type=int)
     # Default include_images to True only when querying by specific user email; false for dashboard tables
     include_images = request.args.get("include_images", "true" if email else "false").lower() in ["1", "true", "yes"]
-    return jsonify(get_scans(email=email, limit=limit, include_images=include_images))
+    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
+    results = get_scans(email=email, limit=limit, include_images=include_images)
+    print(f"[LIST] [API SCANS GET] Returning {len(results)} scans for User='{email or 'all'}' | IP={client_ip}")
+    return jsonify(results)
 
 @app.route("/api/scans/<scan_id>", methods=["PUT", "PATCH", "OPTIONS"])
 def api_update_scan(scan_id):
@@ -1102,6 +1297,8 @@ def api_save_treatment_scan():
     _save_scans_file()
 
     add_log("info", f"Scan {scan_id} saved and treatment completed: {email} ({stain})")
+    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
+    print(f"[TREATMENT] [API TREATMENT COMPLETE] Treatment saved to database: scan_id='{scan_id}' | User='{email}' | Stain='{stain}' | IP={client_ip}")
     current_metrics = get_metrics()
 
     return jsonify({
@@ -1165,14 +1362,15 @@ def api_db_status():
     if request.method == "OPTIONS":
         return jsonify({"status": "ok"})
 
-    global client, db, is_demo_mode
+    global client, db, is_demo_mode, LAST_MONGO_ERROR, MONGO_URI, MONGO_DB_NAME
     active_db = get_db()
     is_connected = False
     details = {
         "status": "connected" if (active_db is not None and not is_demo_mode) else "fallback_mode",
         "is_demo_mode": is_demo_mode or (active_db is None),
         "database_name": MONGO_DB_NAME if (active_db is not None and not is_demo_mode) else "local_json_mock",
-        "mongo_configured": bool(MONGO_URI)
+        "mongo_configured": bool(MONGO_URI or os.environ.get("MONGO_URI")),
+        "last_error": LAST_MONGO_ERROR
     }
 
     if active_db is not None and client is not None:
@@ -1187,6 +1385,7 @@ def api_db_status():
         except Exception as e:
             is_connected = False
             details["ping_error"] = str(e)
+            details["last_error"] = str(e)
 
     details["is_connected"] = is_connected
     return jsonify(details), 200
@@ -1555,7 +1754,234 @@ def predict():
                     "details": err_detail
                 }), 503
 
-        # 5. Image Quality & Out-of-Distribution Plausibility Checks
+        # Convert uploaded PIL image to OpenCV BGR format
+        cv_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+
+        # =========================================================
+        # LAYER 1: OOD PRE-CHECK (OpenCV Skin & Face Filter)
+        # =========================================================
+        # a) YCrCb Human Skin Filter
+        # Check human skin pixel ratios using bounds: lower [0, 133, 77], upper [255, 173, 127]
+        try:
+            cv_ycrcb = cv2.cvtColor(cv_bgr, cv2.COLOR_BGR2YCrCb)
+            lower_skin = np.array([0, 133, 77], dtype=np.uint8)
+            upper_skin = np.array([255, 173, 127], dtype=np.uint8)
+            raw_skin_mask = cv2.inRange(cv_ycrcb, lower_skin, upper_skin)
+
+            # Exclude near-white / neutral fabric highlights (Y > 215, S < 35) to prevent
+            # warm-lit white/grey cotton and golden cooking oil from being falsely flagged as skin
+            hsv_img = cv2.cvtColor(cv_bgr, cv2.COLOR_BGR2HSV)
+            y_chan = cv_ycrcb[:, :, 0]
+            s_chan = hsv_img[:, :, 1]
+            is_fabric_highlight = (y_chan > 215) & (s_chan < 35)
+            skin_mask = (raw_skin_mask > 0) & (~is_fabric_highlight)
+            skin_ratio = float(np.mean(skin_mask))
+        except Exception as skin_err:
+            print(f"[Predict] Skin filter warning: {skin_err}")
+            skin_ratio = 0.0
+
+        if skin_ratio > 0.30:
+            rejection_msg = "Scan rejected: Human skin detected. Please scan a cotton fabric stain."
+            scan_id = "h_" + datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            try:
+                metrics, scan_id = increment_scan_count(
+                    stain_name="Unidentified Object",
+                    fabric_name="Unidentified / N/A",
+                    confidence=0,
+                    email=user_email,
+                    image=data.get("image", "")
+                )
+            except Exception as scan_err:
+                print(f"[Predict] Warning: Failed to record skin-rejected scan: {scan_err}")
+
+            client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
+            print(f"[PREDICT] [OOD SKIN REJECTED] Intercepted by skin filter: skin_ratio={round(skin_ratio*100, 1)}% > 30% | User='{user_email or 'anonymous'}' | IP={client_ip}")
+
+            return jsonify({
+                "id":                   scan_id,
+                "status":               "success",
+                "stain_type":           "Unidentified Object",
+                "is_valid_fabric":      False,
+                "is_classified":        False,
+                "confidence":           0,
+                "confidence_score":     0.0,
+                "skin_ratio":           round(skin_ratio, 4),
+                "margin":               0.0,
+                "message":              rejection_msg,
+                "rejection_message":    rejection_msg,
+                "caution":              rejection_msg,
+                "stain":                "Unidentified Object",
+                "stain_classification": "Unidentified Object",
+                "fabric_material":      "Unidentified / N/A",
+                "fabric_color":         "N/A",
+                "fabric_type":          "Unidentified / N/A",
+                "fabric":               "Unidentified / N/A",
+                "steps":                [],
+                "materials":            [],
+                "probabilities": {
+                    "Black Ballpen Ink": 0.0,
+                    "Used Cooking Oil":  0.0,
+                    "Mud":               0.0
+                },
+                "recommendation": {
+                    "id":               scan_id,
+                    "status":           "inconclusive",
+                    "is_classified":    False,
+                    "is_valid_fabric":  False,
+                    "stain_type":       "Unidentified Object",
+                    "steps":            [],
+                    "caution":          rejection_msg,
+                    "materials":        [],
+                    "fabric_color":     "N/A",
+                    "fabric_type":      "Unidentified / N/A"
+                }
+            }), 200
+
+        # b) Haar Cascade Face Filter
+        face_detected = False
+        if FACE_CASCADE is not None:
+            try:
+                cv_gray = cv2.cvtColor(cv_bgr, cv2.COLOR_BGR2GRAY)
+                h, w = cv_gray.shape[:2]
+                if max(h, w) > 800:
+                    scale = 800.0 / max(h, w)
+                    gray_small = cv2.resize(cv_gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+                else:
+                    gray_small = cv_gray
+                faces = FACE_CASCADE.detectMultiScale(gray_small, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
+                if len(faces) > 0:
+                    face_detected = True
+            except Exception as face_err:
+                print(f"[Predict] Face detection warning: {face_err}")
+
+        if face_detected:
+            rejection_msg = "Scan rejected: Face detected. Please scan a cotton fabric stain."
+            scan_id = "h_" + datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            try:
+                metrics, scan_id = increment_scan_count(
+                    stain_name="Unidentified Object",
+                    fabric_name="Unidentified / N/A",
+                    confidence=0,
+                    email=user_email,
+                    image=data.get("image", "")
+                )
+            except Exception as scan_err:
+                print(f"[Predict] Warning: Failed to record face-rejected scan: {scan_err}")
+
+            client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
+            print(f"[PREDICT] [OOD FACE REJECTED] Intercepted by face detector | User='{user_email or 'anonymous'}' | IP={client_ip}")
+
+            return jsonify({
+                "id":                   scan_id,
+                "status":               "success",
+                "stain_type":           "Unidentified Object",
+                "is_valid_fabric":      False,
+                "is_classified":        False,
+                "confidence":           0,
+                "confidence_score":     0.0,
+                "margin":               0.0,
+                "message":              rejection_msg,
+                "rejection_message":    rejection_msg,
+                "caution":              rejection_msg,
+                "stain":                "Unidentified Object",
+                "stain_classification": "Unidentified Object",
+                "fabric_material":      "Unidentified / N/A",
+                "fabric_color":         "N/A",
+                "fabric_type":          "Unidentified / N/A",
+                "fabric":               "Unidentified / N/A",
+                "steps":                [],
+                "materials":            [],
+                "probabilities": {
+                    "Black Ballpen Ink": 0.0,
+                    "Used Cooking Oil":  0.0,
+                    "Mud":               0.0
+                },
+                "recommendation": {
+                    "id":               scan_id,
+                    "status":           "inconclusive",
+                    "is_classified":    False,
+                    "is_valid_fabric":  False,
+                    "stain_type":       "Unidentified Object",
+                    "steps":            [],
+                    "caution":          rejection_msg,
+                    "materials":        [],
+                    "fabric_color":     "N/A",
+                    "fabric_type":      "Unidentified / N/A"
+                }
+            }), 200
+
+        # c) Out-of-Distribution Pre-Check: Laplacian Texture Variance
+        # Decode into grayscale to evaluate surface texture weave (threads vs smooth surfaces)
+        TEXTURE_THRESHOLD = 15.0
+        try:
+            cv_gray = cv2.cvtColor(cv_bgr, cv2.COLOR_BGR2GRAY)
+            gray_std = cv2.resize(cv_gray, (224, 224), interpolation=cv2.INTER_AREA)
+            laplacian_std = float(cv2.Laplacian(gray_std, cv2.CV_64F).var())
+            laplacian_raw = float(cv2.Laplacian(cv_gray, cv2.CV_64F).var())
+            texture_variance = max(laplacian_std, laplacian_raw)
+        except Exception as cv_err:
+            print(f"[Predict] Texture variance check warning: {cv_err}")
+            texture_variance = 0.0
+
+        # If texture variance is below threshold, immediately intercept smooth non-fabric objects, walls, or blanks
+        if texture_variance < TEXTURE_THRESHOLD:
+            rejection_message = "Image lacks textile texture or detail. Please scan a clear cotton fabric."
+            scan_id = "h_" + datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            try:
+                metrics, scan_id = increment_scan_count(
+                    stain_name="Unidentified Object",
+                    fabric_name="Unidentified / N/A",
+                    confidence=0,
+                    email=user_email,
+                    image=data.get("image", "")
+                )
+            except Exception as scan_err:
+                print(f"[Predict] Warning: Failed to record smooth/texture-less scan: {scan_err}")
+
+            client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
+            print(f"[PREDICT] [OOD TEXTURE REJECTED] Intercepted by Laplacian texture guardrail: variance={round(texture_variance, 2)} < {TEXTURE_THRESHOLD} | User='{user_email or 'anonymous'}' | IP={client_ip}")
+
+            return jsonify({
+                "id":                   scan_id,
+                "status":               "success",
+                "is_classified":        False,
+                "is_valid_fabric":      False,
+                "stain_type":           "Unidentified Object",
+                "stain":                "Unidentified Object",
+                "stain_classification": "Unidentified Object",
+                "fabric_material":      "Unidentified / N/A",
+                "fabric_color":         "N/A",
+                "fabric_type":          "Unidentified / N/A",
+                "confidence":           0,
+                "confidence_score":     0.0,
+                "texture_variance":     round(texture_variance, 2),
+                "margin":               0.0,
+                "probabilities": {
+                    "Black Ballpen Ink": 0.0,
+                    "Used Cooking Oil":  0.0,
+                    "Mud":               0.0
+                },
+                "fabric":               "Unidentified / N/A",
+                "message":              rejection_message,
+                "rejection_message":    rejection_message,
+                "caution":              rejection_message,
+                "steps":                [],
+                "materials":            [],
+                "recommendation": {
+                    "id":               scan_id,
+                    "status":           "inconclusive",
+                    "is_classified":    False,
+                    "is_valid_fabric":  False,
+                    "stain_type":       "Unidentified Object",
+                    "steps":            [],
+                    "caution":          rejection_message,
+                    "materials":        [],
+                    "fabric_color":     "N/A",
+                    "fabric_type":      "Unidentified / N/A"
+                }
+            }), 200
+
+        # d) Image Quality & Out-of-Distribution Plausibility Checks
         # Prevent CLAHE contrast equalization from inflating flat/uniform sensor noise into artificial "Mud"
         is_flat_surface = False
         is_vivid_non_fabric = False
@@ -1573,14 +1999,13 @@ def predict():
 
         # Check HSV color saturation to reject vivid non-fabric objects (e.g., Persian rugs, neon objects)
         try:
-            import cv2
             hsv = cv2.cvtColor(arr_raw, cv2.COLOR_RGB2HSV)
             mean_sat = float(np.mean(hsv[:, :, 1]))
             is_vivid_non_fabric = (mean_sat > 75.0)
         except Exception as ood_sat_err:
             print(f"[Predict] Saturation check warning: {ood_sat_err}")
 
-        # 6. Preprocess uploaded camera/gallery image
+        # Preprocess uploaded camera/gallery image for CNN inference
         try:
             input_arr = preprocess_image(image)  # (1, 224, 224, 3)
         except Exception as prep_err:
@@ -1591,7 +2016,7 @@ def predict():
                 "details": str(prep_err)
             }), 500
 
-        # 7. Run real TensorFlow CNN inference
+        # Run real TensorFlow CNN inference
         try:
             predictions = model.predict(input_arr, verbose=0)  # (1, 3) softmax probabilities
             probs       = predictions[0]                        # (3,)
@@ -1603,11 +2028,11 @@ def predict():
                 "details": str(inf_err)
             }), 500
         
-        # Sort predictions to evaluate top-1 vs top-2 class probabilities
+        # Calculate max_confidence and sort predictions to evaluate top-1 vs top-2 class probabilities
+        max_confidence     = float(np.max(predictions))
         order              = np.argsort(probs)[::-1]
         top1_idx           = int(order[0])
         top2_idx           = int(order[1])
-        max_confidence     = float(probs[top1_idx])
         top2_confidence    = float(probs[top2_idx])
         margin             = max_confidence - top2_confidence
         confidence_percent = int(round(max_confidence * 100))
@@ -1636,31 +2061,33 @@ def predict():
             }
             fabric_color = "White Cotton"
 
-        # ROBUST CONFIDENCE THRESHOLD & MARGIN / OUT-OF-DISTRIBUTION VALIDATION CHECK
-        CONFIDENCE_THRESHOLD = 0.75  # 75% safe confidence threshold
-        MARGIN_THRESHOLD     = 0.25  # 25% minimum separation between top-1 and top-2 classes
-
-        is_low_confidence = (max_confidence < CONFIDENCE_THRESHOLD or confidence_percent < 75)
+        # =========================================================
+        # LAYER 2: SOFTMAX CONFIDENCE THRESHOLD
+        # =========================================================
+        MARGIN_THRESHOLD = 0.20  # Minimum separation between top-1 and top-2 classes
+        is_low_confidence = (max_confidence < CONFIDENCE_THRESHOLD)
         is_narrow_margin  = (margin < MARGIN_THRESHOLD)
         is_unidentified   = is_low_confidence or is_narrow_margin or is_flat_surface or is_vivid_non_fabric
 
         fallback_scan_id = "h_" + datetime.utcnow().strftime("%Y%m%d%H%M%S")
 
         if is_unidentified:
-            unidentified_title = "Unidentified Stain"
-            if is_flat_surface:
-                caution_message = "No visible stain pattern detected. Garment surface appears clean or uniform."
+            unidentified_title = "Unidentified Object"
+            if is_low_confidence:
+                rejection_message = "Scan rejected: Unrecognized surface pattern or low model certainty."
+            elif is_flat_surface:
+                rejection_message = "No visible stain pattern detected. Garment surface appears clean, uniform, or non-fabric."
             elif is_vivid_non_fabric:
-                caution_message = "Pattern or color distribution not recognized as white or grey cotton fabric."
+                rejection_message = "Pattern or color distribution not recognized as white or grey cotton fabric."
             elif is_narrow_margin:
-                caution_message = f"Ambiguous Scan. Model uncertainty between stain types (narrow separation of {round(margin*100, 1)}%). Please capture a clearer, centered photo."
+                rejection_message = f"Ambiguous scan. Model uncertainty between stain types (narrow separation of {round(margin*100, 1)}%). Please capture a clearer, centered photo of a stained cotton garment."
             else:
-                caution_message = f"Inconclusive Scan (<75%). Prediction confidence ({confidence_percent}%) is below the safety threshold. Please scan a clear, well-lit photo of a stained cotton garment."
+                rejection_message = "Scan rejected: Unrecognized surface pattern or low model certainty."
 
             scan_id = fallback_scan_id
             try:
                 metrics, scan_id = increment_scan_count(
-                    stain_name="Unidentified",
+                    stain_name="Unidentified Object",
                     fabric_name="Unidentified / N/A",
                     confidence=confidence_percent,
                     email=user_email,
@@ -1669,37 +2096,48 @@ def predict():
             except Exception as scan_err:
                 print(f"[Predict] Warning: Failed to record unidentified scan: {scan_err}")
 
-            print(f"Prediction overridden to Unidentified: conf={confidence_percent}%, margin={margin_percent}%, flat={is_flat_surface}, vivid={is_vivid_non_fabric} | Probs: {probabilities}")
+            client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
+            print(f"[PREDICT] [OOD REJECTED] Scan rejected by guardrail: stain='Unidentified Object', conf={round(max_confidence, 4)} (<{CONFIDENCE_THRESHOLD}), margin={margin_percent}% | User='{user_email or 'anonymous'}' | IP={client_ip}")
 
             return jsonify({
                 "id":                   scan_id,
-                "status":               "Unidentified",
+                "status":               "success",
                 "is_classified":        False,
-                "stain_classification": "Unidentified",
+                "is_valid_fabric":      False,
+                "confidence":           max_confidence,
+                "confidence_score":     round(max_confidence, 4),
+                "stain_type":           "Unidentified Object",
+                "stain":                unidentified_title,
+                "stain_classification": "Unidentified Object",
                 "fabric_material":      "Unidentified / N/A",
                 "fabric_color":         "N/A",
                 "fabric_type":          "Unidentified / N/A",
-                "confidence":           confidence_percent,
+                "texture_variance":     round(texture_variance, 2),
                 "margin":               margin_percent,
                 "probabilities":        probabilities,
-                "stain":                unidentified_title,
                 "fabric":               "Unidentified / N/A",
+                "message":              rejection_message,
+                "rejection_message":    rejection_message,
+                "caution":              rejection_message,
                 "steps":                [],
-                "caution":              caution_message,
                 "materials":            [],
                 "recommendation": {
                     "id":            scan_id,
                     "status":        "inconclusive",
                     "is_classified": False,
+                    "is_valid_fabric": False,
+                    "stain_type":    "Unidentified Object",
                     "steps":         [],
-                    "caution":       caution_message,
+                    "caution":       rejection_message,
                     "materials":     [],
                     "fabric_color":  "N/A",
                     "fabric_type":   "Unidentified / N/A"
                 }
-            })
+            }), 200
 
-        # Confident classification (>= 75% confidence, >= 25% margin, genuine stained fabric)
+        # =========================================================
+        # VALID PREDICTIONS (Both Layer 1 & Layer 2 checks passed)
+        # =========================================================
         scan_id = fallback_scan_id
         try:
             metrics, scan_id = increment_scan_count(
@@ -1712,22 +2150,27 @@ def predict():
         except Exception as scan_err:
             print(f"[Predict] Warning: Failed to record confident scan: {scan_err}")
 
-        print(f"Prediction successful (>=75%, margin={margin_percent}%): {predicted_raw} / {predicted_label} ({confidence_percent}% confidence) | "
-              f"Fabric: {fabric_color} | Probs: {probabilities}")
+        client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
+        print(f"[PREDICT] [SUCCESS] CNN Inference completed: Stain='{predicted_label}' ({confidence_percent}%) | Fabric='{fabric_color}' | User='{user_email or 'anonymous'}' | IP={client_ip}")
 
         # Return authentic CNN model prediction with probability distribution, fabric-specific steps and caution
         return jsonify({
             "id":                   scan_id,
             "status":               "success",
             "is_classified":        True,
+            "is_valid_fabric":      True,
+            "stain_type":           predicted_label,
             "stain_classification": predicted_raw,
             "fabric_material":      "Cotton",
             "fabric_color":         fabric_color,
             "confidence":           confidence_percent,
+            "confidence_score":     round(max_confidence, 4),
+            "texture_variance":     round(texture_variance, 2),
             "margin":               margin_percent,
             "probabilities":        probabilities,
             "stain":                predicted_label,
             "fabric":               f"{fabric_color} (100%)",
+            "message":              f"Successfully recognized {predicted_label} on {fabric_color}.",
             "steps":                rec.get("steps", []),
             "caution":              rec.get("caution", ""),
             "materials":            rec.get("materials", []),
@@ -1735,12 +2178,14 @@ def predict():
                 "id":           scan_id,
                 "status":       "success",
                 "is_classified": True,
+                "is_valid_fabric": True,
+                "stain_type":   predicted_label,
                 "steps":        rec.get("steps", []),
                 "caution":      rec.get("caution", ""),
                 "materials":    rec.get("materials", []),
                 "fabric_color": fabric_color
             }
-        })
+        }), 200
 
     except Exception as unhandled_err:
         print(f"[Predict] Unhandled exception in /predict: {unhandled_err}\n{traceback.format_exc()}")

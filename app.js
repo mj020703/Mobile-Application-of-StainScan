@@ -5,13 +5,49 @@
    ========================================================================== */
 
 // --- Backend API URL Configuration ---
+// Local LAN IPv4 of this PC (configured for Wi-Fi access via Allow_Mobile_Access.bat)
+const LOCAL_PC_LAN_IP = "192.168.1.56";
+const LOCAL_PC_BACKEND = `http://${LOCAL_PC_LAN_IP}:5000`;
 const LIVE_RENDER_BACKEND = "https://stainscan-backend-gmbw.onrender.com";
 
+function resolveApiBaseUrl() {
+    try {
+        // 1. Allow manual override via localStorage if tester sets it
+        const savedBackend = localStorage.getItem("stainscan_backend_url");
+        if (savedBackend) return savedBackend;
+
+        // 2. Check browser location if running in browser
+        if (typeof window !== "undefined" && window.location) {
+            const proto = window.location.protocol;
+            const host = window.location.hostname;
+            const port = window.location.port;
+
+            // If accessed via web browser served from this PC (localhost, 127.0.0.1, or local LAN IP 192.168.1.56)
+            if (host === "localhost" || host === "127.0.0.1" || host === LOCAL_PC_LAN_IP || port === "5000") {
+                return window.location.origin;
+            }
+
+            // If running inside mobile APK, WebView, or Capacitor/Cordova (file://, capacitor://, ionic://, content://)
+            if (proto === "file:" || proto === "capacitor:" || proto === "ionic:" || proto === "content:" || !host) {
+                return LOCAL_PC_BACKEND;
+            }
+        }
+    } catch (e) {
+        console.warn("Could not determine dynamic API base URL, falling back to LOCAL_PC_BACKEND:", e);
+    }
+
+    // Default to the local PC backend for testing and physical phone connectivity
+    return LOCAL_PC_BACKEND;
+}
+
 const CONFIG = {
-    // Strictly points to the live Render backend (Render + MongoDB Atlas cloud cluster)
-    // ensuring mobile APK builds, emulators, WebViews, and web browsers communicate directly with the production server.
-    API_BASE_URL: LIVE_RENDER_BACKEND
+    LOCAL_BACKEND: LOCAL_PC_BACKEND,
+    CLOUD_BACKEND: LIVE_RENDER_BACKEND,
+    // Dynamically resolves to http://192.168.1.56:5000, current server origin, or cloud fallback
+    API_BASE_URL: resolveApiBaseUrl()
 };
+
+console.log(`📡 [StainScan Mobile API] Base URL configured to: ${CONFIG.API_BASE_URL}`);
 
 // --- Default Knowledge Base Recommendations & Precaution Dataset ---
 const defaultKnowledgeBase = {
@@ -243,6 +279,10 @@ const I18N = {
             loader_preprocessing: "Preprocessing Image...",
             loader_reducing_noise: "Reducing background noise and resizing fabric details",
             badge_detection_successful: "Detection Successful",
+            badge_unrecognized_item: "Unrecognized Item",
+            stain_unidentified_object: "Unidentified Object",
+            ood_warning_title: "Guardrail Alert: Not a Stained Cotton Fabric",
+            ood_warning_desc: "The scanned item is not recognized as a stained cotton fabric. Treatment recipes are strictly calibrated for white and grey cotton fabrics only.",
             stain_classification: "Stain Classification",
             fabric_material: "Fabric Color & Material",
             cnn_confidence: "CNN Confidence",
@@ -327,6 +367,10 @@ const I18N = {
             loader_preprocessing: "Ginatipon kag Ginausisa ang Litrato...",
             loader_reducing_noise: "Ginapanubo ang gahod sa background kag ginasibu ang tela",
             badge_detection_successful: "Nadihit sang Matuod",
+            badge_unrecognized_item: "Indi Makilal-an nga Butang",
+            stain_unidentified_object: "Wala Makilal-an nga Butang",
+            ood_warning_title: "Pahibalo: Indi Matuod nga Tela nga Bulak",
+            ood_warning_desc: "Ini nga butang indi makilal-an bilang namantsahan nga tela nga bulak (cotton). Ang giya sa pagpaninlo ginatagana lamang para sa puti kag abohon nga bulak.",
             stain_classification: "Klassipikasyon sang Digo",
             fabric_material: "Kolor kag Materyales sang Tela",
             cnn_confidence: "Kumpirmasyon sang CNN",
@@ -380,6 +424,9 @@ const I18N = {
     tStain(stain) {
         if (!stain) return "";
         const s = String(stain).toLowerCase();
+        if (s.includes("unidentified object")) {
+            return this.currentLang === "hil" ? "Wala Makilal-an nga Butang" : "Unidentified Object";
+        }
         if (s.includes("unidentified") || s.includes("inconclusive") || s.includes("not classified")) {
             return this.currentLang === "hil" ? "Indi Masigurado nga Digo" : "Unidentified Stain";
         }
@@ -395,6 +442,9 @@ const I18N = {
         const f = String(fabric).trim();
         if (f === "N/A" || f.toLowerCase().includes("unidentified")) {
             return this.currentLang === "hil" ? "Wala Makilal-an / N/A" : "Unidentified / N/A";
+        }
+        if (f.toLowerCase().includes("not a recognized") || f.toLowerCase().includes("non-fabric")) {
+            return this.currentLang === "hil" ? "Indi Pamilyar nga Tela" : "Not a Recognized Cotton Fabric";
         }
         if (this.currentLang !== "hil") return fabric;
         return fabric
@@ -515,8 +565,8 @@ class DataStore {
                 let scans = await res.json();
                 scans = scans.map(item => {
                     const conf = parseInt(item.confidence) || 0;
-                    if (conf < 75 || item.stain === "Unidentified" || item.stain === "Unidentified Stain" || item.stain === "Unknown") {
-                        item.stain = "Unidentified";
+                    if (conf < 85 || item.is_valid_fabric === false || item.stain === "Unidentified Object" || item.stain_type === "Unidentified Object" || item.stain === "Unidentified" || item.stain === "Unidentified Stain" || item.stain === "Unknown") {
+                        item.stain = (item.stain === "Unidentified Object" || item.stain_type === "Unidentified Object") ? "Unidentified Object" : "Unidentified Object";
                         item.fabric = "N/A";
                     }
                     return item;
@@ -575,9 +625,9 @@ class DataStore {
         let modified = false;
         const normalized = raw.map(item => {
             const conf = parseInt(item.confidence) || 0;
-            if (conf < 75 || item.stain === "Unidentified" || item.stain === "Unidentified Stain" || item.stain === "Unknown") {
-                if (item.stain !== "Unidentified" && item.stain !== "Unidentified Stain") {
-                    item.stain = "Unidentified";
+            if (conf < 85 || item.is_valid_fabric === false || item.stain === "Unidentified Object" || item.stain_type === "Unidentified Object" || item.stain === "Unidentified" || item.stain === "Unidentified Stain" || item.stain === "Unknown") {
+                if (item.stain !== "Unidentified Object" && item.stain !== "Unidentified" && item.stain !== "Unidentified Stain") {
+                    item.stain = "Unidentified Object";
                     modified = true;
                 }
                 if (item.fabric !== "N/A" && item.fabric !== "Unidentified / N/A") {
@@ -941,8 +991,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const rawHistory = historyList || DataStore.getHistory();
         const history = rawHistory.map(item => {
             const conf = parseInt(item.confidence) || 0;
-            if (conf < 70) {
-                item.stain = "Unidentified";
+            if (conf < 85 || item.is_valid_fabric === false || item.stain === "Unidentified Object" || item.stain_type === "Unidentified Object") {
+                item.stain = "Unidentified Object";
                 item.fabric = "N/A";
             }
             return item;
@@ -974,11 +1024,17 @@ document.addEventListener("DOMContentLoaded", () => {
             itemEl.className = "scan-item";
 
             const confVal = parseInt(item.confidence) || 0;
-            const isUnidentified = confVal < 70 || item.stain === "Unidentified" || item.stain === "Unidentified Stain" || item.stain === "Not Classified";
+            const isUnidentified = confVal < 85 ||
+                item.is_valid_fabric === false ||
+                item.stain === "Unidentified Object" ||
+                item.stain_type === "Unidentified Object" ||
+                item.stain === "Unidentified" ||
+                item.stain === "Unidentified Stain" ||
+                item.stain === "Not Classified";
 
             let classType = "unknown";
             let icon = "fa-triangle-exclamation";
-            let displayTitle = I18N.currentLang === "hil" ? "Indi Masigurado nga Digo" : "Unidentified Stain";
+            let displayTitle = I18N.currentLang === "hil" ? "Wala Makilal-an nga Butang" : "Unidentified Object";
             let displayFabric = isUnidentified ? "N/A" : I18N.tFabric(item.fabric);
 
             if (!isUnidentified) {
@@ -1008,7 +1064,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             itemEl.addEventListener("click", () => {
                 if (isUnidentified) {
-                    showToast(I18N.currentLang === "hil" ? "Wala sing giya para sa indi masigurado nga digo (<70%)." : "Treatment guide is not available for unidentified stains (<70%).", "warning");
+                    showToast(I18N.currentLang === "hil" ? "Wala sing giya para sa indi masigurado nga digo (<85%)." : "Treatment guide is not available for unrecognized non-fabric items (<85%).", "warning");
                     return;
                 }
                 openCleaningGuide(item);
@@ -1208,10 +1264,16 @@ document.addEventListener("DOMContentLoaded", () => {
                     if (predictionError) {
                         processScanningFailure(predictionError.message || "Connection refused");
                     } else if (predictionResult && !predictionResult.error) {
-                        const rawStain = predictionResult.stain_classification || predictionResult.stain || "Unknown Stain";
+                        const rawStain = predictionResult.stain_type || predictionResult.stain_classification || predictionResult.stain || "Unknown Stain";
                         const confVal = parseInt(predictionResult.confidence) || 0;
-                        const isClassified = predictionResult.is_classified !== false && confVal >= 70 && predictionResult.status !== "Unidentified";
-                        let displayStain = "Unidentified Stain";
+                        const isValidFabric = predictionResult.is_valid_fabric !== false;
+                        const isUnidentifiedObj = rawStain === "Unidentified Object" ||
+                                                 predictionResult.stain_type === "Unidentified Object" ||
+                                                 predictionResult.status === "Unidentified" ||
+                                                 predictionResult.is_classified === false;
+
+                        const isClassified = isValidFabric && !isUnidentifiedObj && confVal >= 85;
+                        let displayStain = "Unidentified Object";
                         let fabricMat = "Unidentified / N/A";
                         if (isClassified) {
                             if (rawStain.toLowerCase().includes("ballpen") || rawStain.toLowerCase().includes("ink")) {
@@ -1221,7 +1283,7 @@ document.addEventListener("DOMContentLoaded", () => {
                             } else if (rawStain.toLowerCase().includes("mud")) {
                                 displayStain = "Mud";
                             } else {
-                                displayStain = predictionResult.stain || rawStain;
+                                displayStain = predictionResult.stain_type || predictionResult.stain || rawStain;
                             }
                             fabricMat = predictionResult.fabric || (predictionResult.fabric_color ? `${predictionResult.fabric_color} (100%)` : "Cotton Fabric (100%)");
                         }
@@ -1266,7 +1328,13 @@ document.addEventListener("DOMContentLoaded", () => {
     function processScanningSuccess(stain, fabric, confidence, recommendation = null) {
         const confNum = parseInt(confidence) || 0;
         const isCotton = fabric.includes("Cotton") || fabric.includes("Bulak");
-        const isLowConfidence = confNum < 75 ||
+        const isValidFabric = recommendation ? recommendation.is_valid_fabric !== false : true;
+        const isUnidentifiedObject = stain === "Unidentified Object" ||
+            (recommendation && (recommendation.stain_type === "Unidentified Object" || recommendation.stain === "Unidentified Object"));
+
+        const isLowConfidence = !isValidFabric ||
+            isUnidentifiedObject ||
+            confNum < 85 ||
             stain === "Unidentified" ||
             stain === "Unidentified Stain" ||
             stain === "Unknown" ||
@@ -1287,46 +1355,58 @@ document.addEventListener("DOMContentLoaded", () => {
         const resultProcedureStepCount = document.getElementById("resultProcedureStepCount");
         const btnViewCleaningGuide = document.getElementById("btnViewCleaningGuide");
 
-        // 1. Check if scan is below 75% threshold, narrow margin, or out-of-distribution (Unidentified / Inconclusive)
+        // 1. Check if scan fails confidence threshold (<85%), is non-fabric, or triggers Out-of-Distribution guardrail
         if (isLowConfidence) {
-            const displayTitle = I18N.currentLang === "hil" ? "Indi Masigurado nga Digo" : "Unidentified Stain";
-            const displayFabric = I18N.currentLang === "hil" ? "Wala Makilal-an / N/A" : "Unidentified / N/A";
+            const displayTitle = I18N.currentLang === "hil" ? "Wala Makilal-an nga Butang" : "Unidentified Object";
+            const displayFabric = I18N.currentLang === "hil" ? "Indi Pamilyar nga Tela / N/A" : "Not a Recognized Cotton Fabric";
 
-            // Hide the top status badge altogether for inconclusive scans (<75%)
+            // Prominent Warning Badge for OOD / Non-fabric scan
             if (resultsBadge) {
-                resultsBadge.style.display = "none";
+                resultsBadge.style.display = "inline-flex";
+                resultsBadge.className = "results-badge warning";
+                resultsBadge.innerHTML = `<i class="fas fa-triangle-exclamation"></i> <span>${I18N.currentLang === "hil" ? "Indi Makilal-an nga Butang" : "Unrecognized Non-Fabric / OOD"}</span>`;
+                resultsBadge.style.backgroundColor = "rgba(239, 68, 68, 0.15)";
+                resultsBadge.style.color = "#ef4444";
+                resultsBadge.style.border = "1px solid rgba(239, 68, 68, 0.35)";
             }
 
             const resultsCardEl = document.getElementById("resultsCard");
             if (resultsCardEl) {
-                resultsCardEl.style.borderColor = "rgba(245, 158, 11, 0.3)";
+                resultsCardEl.style.borderColor = "rgba(239, 68, 68, 0.4)";
             }
 
-            // Core fields clearly visible with warning amber state
+            // Core fields clearly visible with warning red/amber state
             resultStainType.textContent = displayTitle;
-            resultStainType.style.color = "#f59e0b";
+            resultStainType.style.color = "#ef4444";
             resultFabricType.textContent = displayFabric;
             resultConfidence.textContent = `${confNum}%`;
             resultConfidenceBar.style.width = `${confNum}%`;
             resultConfidenceBar.className = "confidence-bar warning";
 
-            // Render prominent Uncertainty Warning Card with caution message
-            const cautionMsg = (recommendation && recommendation.caution)
-                ? recommendation.caution
+            // Render prominent Uncertainty/Guardrail Warning Card with rejection message
+            const cautionMsg = (recommendation && (recommendation.message || recommendation.rejection_message || recommendation.caution))
+                ? (recommendation.message || recommendation.rejection_message || recommendation.caution)
                 : ((recommendation && recommendation.recommendation && recommendation.recommendation.caution)
                     ? recommendation.recommendation.caution
                     : "");
+
+            const defaultRejectionText = I18N.currentLang === "hil"
+                ? "Ini nga butang indi makilal-an bilang namantsahan nga tela nga bulak (cotton). Ang kumpirmasyon sang modelo mas manubo sa 85% safety threshold. Palihog mag-scan sang matuod nga tela nga bulak."
+                : "The scanned item is not recognized as a stained cotton fabric. Prediction confidence is below the strict 85% safety threshold or non-fabric textures were detected.";
+
             if (resultCautionCard && resultCautionText) {
-                resultCautionText.textContent = cautionMsg || (I18N.currentLang === "hil"
-                    ? "Indi masigurado ang resulta (<75% o indi maathag nga digo). Palihog magkuha sang mas masanag kag klaro nga litrato sang nadugaan nga tela."
-                    : "Inconclusive scan (<75% confidence or narrow probability margin). Please scan a clear, well-lit photo of a stained cotton garment.");
+                resultCautionText.textContent = cautionMsg || defaultRejectionText;
                 if (resultCautionTitle) {
-                    resultCautionTitle.textContent = I18N.currentLang === "hil" ? "Pahibalo sa Pag-scan" : "Scan Uncertainty Warning";
+                    resultCautionTitle.textContent = I18N.currentLang === "hil"
+                        ? "Pahibalo: Indi Matuod nga Tela nga Bulak"
+                        : "Guardrail Alert: Not a Stained Cotton Fabric";
                 }
                 resultCautionCard.style.display = "block";
+                resultCautionCard.style.borderColor = "rgba(239, 68, 68, 0.4)";
+                resultCautionCard.style.backgroundColor = "rgba(239, 68, 68, 0.08)";
             }
 
-            // Strictly do NOT display cleaning procedure or guide button for low-confidence scans
+            // Strictly PREVENT showing treatment/cleaning recipes and hide checklist button
             if (resultProcedureCard) resultProcedureCard.style.display = "none";
             if (btnViewCleaningGuide) btnViewCleaningGuide.style.display = "none";
 
@@ -1334,21 +1414,23 @@ document.addEventListener("DOMContentLoaded", () => {
             scanResultData = {
                 id: serverAssignedId || ("h_" + Date.now()),
                 email: currentUser ? currentUser.email : "guest@stainscan.com",
-                stain: "Unidentified",
-                fabric: "N/A",
+                stain: "Unidentified Object",
+                stain_type: "Unidentified Object",
+                is_valid_fabric: false,
+                fabric: "Unidentified / N/A",
                 fabric_color: "N/A",
                 fabric_type: "Unidentified / N/A",
                 confidence: confNum,
                 probabilities: (recommendation && recommendation.probabilities) ? recommendation.probabilities : null,
                 steps: [],
-                caution: cautionMsg,
+                caution: cautionMsg || defaultRejectionText,
                 materials: [],
                 timestamp: new Date().toISOString(),
                 status: "Pending",
                 image: selectedImageBase64 || ""
             };
 
-            // Save low-confidence scan to history as "Unidentified"
+            // Save low-confidence / OOD scan to history as "Unidentified Object"
             const localHist = DataStore.getHistory();
             localHist.unshift(scanResultData);
             DataStore.saveHistory(localHist.slice(0, 10));
@@ -1357,9 +1439,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 DataStore.saveHistoryCloud(scanResultData);
             }
 
-            DataStore.addLog("warning", `Inconclusive CNN Scan (<75% or ambiguous margin): Unidentified (${confNum}% confidence)`);
+            DataStore.addLog("warning", `OOD guardrail triggered: Unidentified Object (${confNum}% confidence < 85%)`);
             resultsCard.style.display = "block";
-            showToast(I18N.currentLang === "hil" ? "Indi Masigurado nga Pag-scan (<75%)" : "Inconclusive Scan (<75%)", "warning");
+            showToast(I18N.currentLang === "hil"
+                ? "Pahibalo: Ang gin-scan indi makilal-an nga tela nga bulak (<85%)."
+                : "Item is not recognized as a stained cotton fabric (Confidence < 85%).", "warning");
             return;
         }
 
@@ -1518,8 +1602,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const rawHistory = historyList || JSON.parse(localStorage.getItem(`stainscan_history_${currentUser.email}`)) || [];
         const history = rawHistory.map(item => {
             const conf = parseInt(item.confidence) || 0;
-            if (conf < 75 || item.stain === "Unidentified" || item.stain === "Unidentified Stain" || item.stain === "Unknown") {
-                item.stain = "Unidentified";
+            if (conf < 85 || item.is_valid_fabric === false || item.stain === "Unidentified Object" || item.stain_type === "Unidentified Object" || item.stain === "Unidentified" || item.stain === "Unidentified Stain" || item.stain === "Unknown") {
+                item.stain = "Unidentified Object";
                 item.fabric = "N/A";
             }
             return item;
@@ -1549,11 +1633,18 @@ document.addEventListener("DOMContentLoaded", () => {
             itemEl.className = "scan-item";
 
             const confVal = parseInt(item.confidence) || 0;
-            const isUnidentified = confVal < 75 || item.stain === "Unidentified" || item.stain === "Unidentified Stain" || item.stain === "Unknown" || item.stain === "Not Classified";
+            const isUnidentified = confVal < 85 ||
+                item.is_valid_fabric === false ||
+                item.stain === "Unidentified Object" ||
+                item.stain_type === "Unidentified Object" ||
+                item.stain === "Unidentified" ||
+                item.stain === "Unidentified Stain" ||
+                item.stain === "Unknown" ||
+                item.stain === "Not Classified";
 
             let classType = "unknown";
             let icon = "fa-triangle-exclamation";
-            let displayTitle = I18N.currentLang === "hil" ? "Indi Masigurado nga Digo" : "Unidentified Stain";
+            let displayTitle = I18N.currentLang === "hil" ? "Wala Makilal-an nga Butang" : "Unidentified Object";
             let displayFabric = isUnidentified ? "N/A" : I18N.tFabric(item.fabric);
 
             if (!isUnidentified) {
@@ -1583,7 +1674,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             itemEl.addEventListener("click", () => {
                 if (isUnidentified) {
-                    showToast(I18N.currentLang === "hil" ? "Wala sing giya para sa indi masigurado nga digo (<70%)." : "Treatment guide is not available for unidentified stains (<70%).", "warning");
+                    showToast(I18N.currentLang === "hil" ? "Wala sing giya para sa indi masigurado nga digo (<85%)." : "Treatment guide is not available for unrecognized items (<85%).", "warning");
                     return;
                 }
                 openCleaningGuide(item);
@@ -1615,8 +1706,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function openCleaningGuide(historyItem) {
         const confVal = parseInt(historyItem.confidence) || 0;
-        if (confVal < 70 || historyItem.stain === "Unidentified" || historyItem.stain === "Unidentified Stain" || historyItem.stain === "Not Classified") {
-            showToast(I18N.currentLang === "hil" ? "Wala sing giya para sa indi masigurado nga digo (<70%)." : "Treatment guide is not available for unidentified stains (<70%).", "warning");
+        const isInvalid = historyItem.is_valid_fabric === false ||
+            confVal < 85 ||
+            historyItem.stain === "Unidentified Object" ||
+            historyItem.stain_type === "Unidentified Object" ||
+            historyItem.stain === "Unidentified" ||
+            historyItem.stain === "Unidentified Stain" ||
+            historyItem.stain === "Not Classified";
+
+        if (isInvalid) {
+            showToast(I18N.currentLang === "hil" ? "Wala sing giya para sa indi masigurado nga digo (<85%)." : "Treatment guide is not available: Item is not a recognized stained cotton fabric.", "warning");
             return;
         }
 

@@ -33,5 +33,13 @@
     "password": "user123",
     "role": "user",
     "avatar": "Test User"
+  },
+  {
+    "name": "Mobile Tester",
+    "email": "mobile_test@stainscan.com",
+    "password": "testerpassword123",
+    "role": "user",
+    "avatar": "Mobile Tester",
+    "_id": "6ad68c11ead2f180d40176a2"
   }
 ]
