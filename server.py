@@ -35,7 +35,30 @@ CONFIDENCE_THRESHOLD = 0.85                       # Strict 85% confidence thresh
 LOADED_MODEL_FILE    = None
 LAST_MODEL_ERROR     = None
 
-# Initialize Haar cascade face detector if available
+# Initialize face detectors (YuNet ONNX and Haar Cascade fallback)
+FACE_DETECTOR_YN = None
+try:
+    yunet_candidates = [
+        "face_detection_yunet.onnx",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "face_detection_yunet.onnx")
+    ]
+    if hasattr(cv2, "FaceDetectorYN_create"):
+        for y_path in yunet_candidates:
+            if os.path.exists(y_path):
+                FACE_DETECTOR_YN = cv2.FaceDetectorYN_create(
+                    model=y_path,
+                    config="",
+                    input_size=(320, 320),
+                    score_threshold=0.78,
+                    nms_threshold=0.3,
+                    top_k=5000
+                )
+                print(f"YuNet deep neural face detector loaded successfully from '{y_path}'.")
+                break
+except Exception as yunet_init_err:
+    print(f"Warning: YuNet face detector initialization: {yunet_init_err}")
+    FACE_DETECTOR_YN = None
+
 FACE_CASCADE = None
 try:
     cascade_filename = "haarcascade_frontalface_default.xml"
@@ -400,7 +423,7 @@ def _load_initial_users():
 def _save_users_file():
     try:
         with open(USERS_FILE, "w", encoding="utf-8") as f:
-            json.dump(mock_db["users"], f, indent=2)
+            json.dump(mock_db["users"], f, indent=2, default=str)
     except Exception as e:
         print(f"Error saving users file: {e}")
 
@@ -430,8 +453,11 @@ mock_db = {
 
 def _save_scans_file():
     try:
-        with open(SCANS_FILE, "w", encoding="utf-8") as f:
-            json.dump(mock_db["scans"], f, indent=2)
+        tmp_file = SCANS_FILE + ".tmp"
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(mock_db["scans"], f, indent=2, default=str)
+        if os.path.exists(tmp_file):
+            os.replace(tmp_file, SCANS_FILE)
     except Exception as e:
         print(f"Error saving scans file: {e}")
 
@@ -1768,19 +1794,20 @@ def predict():
             upper_skin = np.array([255, 173, 127], dtype=np.uint8)
             raw_skin_mask = cv2.inRange(cv_ycrcb, lower_skin, upper_skin)
 
-            # Exclude near-white / neutral fabric highlights (Y > 215, S < 35) to prevent
+            # Exclude near-white / neutral fabric highlights (Y > 215, S < 35)
+            # and require physiological skin saturation (S >= 70) to prevent
             # warm-lit white/grey cotton and golden cooking oil from being falsely flagged as skin
             hsv_img = cv2.cvtColor(cv_bgr, cv2.COLOR_BGR2HSV)
             y_chan = cv_ycrcb[:, :, 0]
             s_chan = hsv_img[:, :, 1]
             is_fabric_highlight = (y_chan > 215) & (s_chan < 35)
-            skin_mask = (raw_skin_mask > 0) & (~is_fabric_highlight)
+            skin_mask = (raw_skin_mask > 0) & (s_chan >= 70) & (~is_fabric_highlight)
             skin_ratio = float(np.mean(skin_mask))
         except Exception as skin_err:
             print(f"[Predict] Skin filter warning: {skin_err}")
             skin_ratio = 0.0
 
-        if skin_ratio > 0.30:
+        if skin_ratio > 0.35:
             rejection_msg = "Scan rejected: Human skin detected. Please scan a cotton fabric stain."
             scan_id = "h_" + datetime.utcnow().strftime("%Y%m%d%H%M%S")
             try:
@@ -1837,9 +1864,25 @@ def predict():
                 }
             }), 200
 
-        # b) Haar Cascade Face Filter
+        # b) Face Filter (YuNet Deep Face Detector + Haar Cascade Fallback)
         face_detected = False
-        if FACE_CASCADE is not None:
+        face_score = 0.0
+        if FACE_DETECTOR_YN is not None:
+            try:
+                h_img, w_img = cv_bgr.shape[:2]
+                FACE_DETECTOR_YN.setInputSize((w_img, h_img))
+                _, faces_yn = FACE_DETECTOR_YN.detect(cv_bgr)
+                if faces_yn is not None and len(faces_yn) > 0:
+                    for fc in faces_yn:
+                        sc = float(fc[-1])
+                        if sc >= 0.78:
+                            face_detected = True
+                            face_score = sc
+                            break
+            except Exception as yn_err:
+                print(f"[Predict] YuNet face detection warning: {yn_err}")
+
+        if not face_detected and FACE_CASCADE is not None:
             try:
                 cv_gray = cv2.cvtColor(cv_bgr, cv2.COLOR_BGR2GRAY)
                 h, w = cv_gray.shape[:2]
@@ -1851,8 +1894,9 @@ def predict():
                 faces = FACE_CASCADE.detectMultiScale(gray_small, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
                 if len(faces) > 0:
                     face_detected = True
+                    face_score = 1.0
             except Exception as face_err:
-                print(f"[Predict] Face detection warning: {face_err}")
+                print(f"[Predict] Haar face detection warning: {face_err}")
 
         if face_detected:
             rejection_msg = "Scan rejected: Face detected. Please scan a cotton fabric stain."
@@ -1869,7 +1913,7 @@ def predict():
                 print(f"[Predict] Warning: Failed to record face-rejected scan: {scan_err}")
 
             client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
-            print(f"[PREDICT] [OOD FACE REJECTED] Intercepted by face detector | User='{user_email or 'anonymous'}' | IP={client_ip}")
+            print(f"[PREDICT] [OOD FACE REJECTED] Intercepted by face detector (confidence={round(face_score*100, 1)}%) | User='{user_email or 'anonymous'}' | IP={client_ip}")
 
             return jsonify({
                 "id":                   scan_id,
