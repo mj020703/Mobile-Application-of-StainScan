@@ -27,8 +27,8 @@ function resolveApiBaseUrl() {
                 return window.location.origin;
             }
 
-            // If accessed directly on Render web domain
-            if (host.includes("onrender.com")) {
+            // If accessed directly on the live backend web service
+            if (host === "stainscan-backend-gmbw.onrender.com") {
                 return window.location.origin;
             }
         }

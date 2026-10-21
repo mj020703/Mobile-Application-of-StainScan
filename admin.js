@@ -7,16 +7,34 @@
 const LIVE_RENDER_BACKEND = "https://stainscan-backend-gmbw.onrender.com";
 
 // Intelligently select API backend URL:
-// 1. If accessed over HTTP/HTTPS from localhost or local LAN IP (e.g., http://localhost:5000), use current origin.
-// 2. If hosted on Render (e.g. https://...onrender.com), use window.location.origin.
-// 3. If accessed from local file system (file://), default to LIVE_RENDER_BACKEND.
+// 1. If accessed over HTTP/HTTPS from local dev server (e.g., http://localhost:5000), use current origin.
+// 2. If hosted directly on the backend Render domain (stainscan-backend-gmbw.onrender.com), use window.location.origin.
+// 3. If hosted on a Render Static Site (e.g. stainscan-admin.onrender.com) or local file (file://), default to LIVE_RENDER_BACKEND.
 function resolveApiBaseUrl() {
-    if (typeof window !== "undefined" && window.location && window.location.protocol.startsWith("http")) {
-        const host = window.location.hostname;
-        if (host === "localhost" || host === "127.0.0.1" || host.startsWith("192.168.") || host.includes("onrender.com")) {
-            return window.location.origin;
+    try {
+        const savedBackend = localStorage.getItem("stainscan_backend_url");
+        if (savedBackend) return savedBackend;
+
+        if (typeof window !== "undefined" && window.location && window.location.protocol.startsWith("http")) {
+            const host = window.location.hostname;
+            const port = window.location.port;
+
+            // If accessed via local development server (localhost, 127.0.0.1, or local LAN IP on port 5000/8000)
+            if (host === "localhost" || host === "127.0.0.1" || host.startsWith("192.168.")) {
+                if (port === "5000" || port === "8000") {
+                    return window.location.origin;
+                }
+            }
+
+            // Only use window.location.origin if hosted directly on the Flask backend web service itself
+            if (host === "stainscan-backend-gmbw.onrender.com") {
+                return window.location.origin;
+            }
         }
+    } catch (e) {
+        console.warn("Could not determine dynamic API base URL, falling back to LIVE_RENDER_BACKEND:", e);
     }
+
     return LIVE_RENDER_BACKEND;
 }
 
