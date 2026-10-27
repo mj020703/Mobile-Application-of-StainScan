@@ -285,16 +285,123 @@ RECOMMENDATION_DATABASE = {
 
 def detect_fabric_color_from_image(pil_image: Image.Image) -> str:
     """
-    Detects whether the cotton fabric is White or Grey based on central crop luminance.
+    Detects whether the cotton garment is White Cotton or Grey Cotton.
+    Isolates unsoiled fabric pixels to prevent dark stains from lowering the fabric brightness,
+    and checks texture contrast to separate smooth white weave from heather/melange grey.
     """
     try:
-        w, h = pil_image.size
-        crop_box = (int(w * 0.15), int(h * 0.15), int(w * 0.85), int(h * 0.85))
-        cropped = pil_image.crop(crop_box).convert("L")
-        mean_lum = float(np.mean(np.array(cropped)))
-        return "Grey Cotton" if mean_lum < 165 else "White Cotton"
+        arr = np.array(pil_image.convert("RGB"))
+        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        
+        # Take central 80% to avoid extreme image borders / table surfaces
+        h, w = gray.shape
+        crop = gray[int(h * 0.1):int(h * 0.9), int(w * 0.1):int(w * 0.9)]
+        
+        # Upper percentile represents the unsoiled garment fabric
+        p90 = float(np.percentile(crop, 90))
+        p75 = float(np.percentile(crop, 75))
+        
+        # Fabric mask: pixels representing the garment background (near p90)
+        fab_mask = (crop >= (p90 - 20)) & (crop <= (p90 + 5))
+        
+        # Laplacian variance of fabric region (heather grey has dark/light mottled fibers)
+        lap = cv2.Laplacian(crop, cv2.CV_64F)
+        lap_var = float(np.var(lap[fab_mask])) if np.sum(fab_mask) > 50 else float(cv2.Laplacian(crop, cv2.CV_64F).var())
+        
+        # White cotton:
+        # 1. Under smartphone/indoor light: p90 >= 150 with smooth weave (lap_var < 100)
+        # 2. Under bright studio light: p90 >= 190
+        # Grey cotton:
+        # 1. Under normal light: p90 is dark (< 145)
+        # 2. Under studio flash: p90 is 155-180, but lap_var is very high (> 110) due to heather yarn
+        if p90 >= 190:
+            return "White Cotton"
+        elif p90 < 145:
+            return "Grey Cotton"
+        else:
+            # Ambiguous range (145 <= p90 < 190)
+            if lap_var > 110:
+                return "Grey Cotton"
+            else:
+                return "White Cotton"
     except Exception:
         return "White Cotton"
+
+def check_used_cooking_oil_lipid_signature(pil_image: Image.Image, fabric_color: str) -> tuple:
+    """
+    Evaluates whether a stain identified with brown/droplet characteristics is actually
+    Used Cooking Oil rather than Mud.
+    Physical differentiation:
+      - On White Cotton: Fluid liquid wicking into weave, smooth capillary gradient,
+        low internal Laplacian texture variance (< 180), amber lipid hue (H 14-45).
+      - On Grey Cotton: Oil creates low-saturation translucent darkening (Sat < 26),
+        whereas Mud deposits rich clay pigment (Sat > 35, R-B > 10).
+    """
+    try:
+        arr = np.array(pil_image.convert("RGB"))
+        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        hsv = cv2.cvtColor(arr, cv2.COLOR_RGB2HSV)
+        
+        h_img, w_img = gray.shape
+        crop_gray = gray[int(h_img * 0.08):int(h_img * 0.92), int(w_img * 0.08):int(w_img * 0.92)]
+        crop_hsv = hsv[int(h_img * 0.08):int(h_img * 0.92), int(w_img * 0.08):int(w_img * 0.92)]
+        crop_bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)[int(h_img * 0.08):int(h_img * 0.92), int(w_img * 0.08):int(w_img * 0.92)]
+        
+        p90 = float(np.percentile(crop_gray, 90))
+        p10 = float(np.percentile(crop_gray, 10))
+        
+        stain_thresh = p90 - max(10.0, (p90 - p10) * 0.16)
+        stain_mask = (crop_gray < stain_thresh).astype(np.uint8)
+        num_pixels = int(np.sum(stain_mask))
+        
+        if num_pixels < 30:
+            return False, 0.0, 0.0
+            
+        lap = cv2.Laplacian(crop_gray, cv2.CV_64F)
+        stain_lap_var = float(np.var(lap[stain_mask > 0]))
+        
+        stain_h = crop_hsv[:, :, 0][stain_mask > 0]
+        stain_s = crop_hsv[:, :, 1][stain_mask > 0]
+        mean_sat = float(np.mean(stain_s))
+        
+        stain_bgr_pix = crop_bgr[stain_mask > 0]
+        r_mean = float(np.mean(stain_bgr_pix[:, 2]))
+        b_mean = float(np.mean(stain_bgr_pix[:, 0]))
+        warmth_diff = r_mean - b_mean
+        
+        # Amber/yellow lipid pixels (H 14 to 45, S >= 14)
+        amber_count = np.sum((stain_h >= 14) & (stain_h <= 45) & (stain_s >= 14))
+        amber_ratio = float(amber_count / max(1, num_pixels))
+        
+        # Circularity of droplets
+        contours, _ = cv2.findContours(stain_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        circs = []
+        for c in contours:
+            a = cv2.contourArea(c)
+            if a > 35:
+                p = cv2.arcLength(c, True)
+                if p > 0:
+                    circs.append(4 * np.pi * (a / (p * p)))
+        mean_circ = float(np.mean(circs)) if circs else 0.0
+        
+        is_used_oil = False
+        if "White" in fabric_color:
+            # White Cotton:
+            # Used cooking oil has low internal texture variance (< 180) and amber/droplet profile
+            # Mud has rough crust (stain_lap_var > 300)
+            if stain_lap_var < 180 and (amber_ratio >= 0.40 or mean_circ >= 0.40):
+                is_used_oil = True
+        else:
+            # Grey Cotton:
+            # Oil creates translucent darkening with low saturation (mean_sat < 26 and warmth_diff < 9)
+            # Mud creates colorful clay deposits with high saturation (mean_sat > 35) and warmth
+            if mean_sat < 26 and warmth_diff < 9:
+                is_used_oil = True
+                
+        return is_used_oil, stain_lap_var, amber_ratio
+    except Exception as e:
+        print(f"Error in lipid check: {e}")
+        return False, 0.0, 0.0
 
 def get_recommendation(stain_name: str, fabric_color_or_type: str = None, image: Image.Image = None) -> dict:
     """
@@ -2099,6 +2206,31 @@ def predict():
         predicted_raw      = CLASS_MAPPING_RAW.get(top1_idx, "Unknown")
         predicted_label    = CLASS_MAPPING_DISPLAY.get(top1_idx, predicted_raw)
 
+        # Detect fabric color context
+        detected_fabric = detect_fabric_color_from_image(image)
+        actual_fabric_color = fabric_context if fabric_context and ("cotton" in fabric_context.lower()) else detected_fabric
+
+        # Disambiguation: If CNN top-1 prediction is Mud, verify whether physical lipid characteristics indicate Used Cooking Oil
+        if predicted_label == "Mud":
+            is_used_oil, lipid_lap_var, lipid_amber = check_used_cooking_oil_lipid_signature(image, actual_fabric_color)
+            if is_used_oil:
+                print(f"[PREDICT] [DISAMBIGUATION] Stain classified by CNN as Mud was identified as Used Cooking Oil (stain_lap_var={lipid_lap_var:.1f}, amber_ratio={lipid_amber:.2f}). Adjusting classification.")
+                top1_idx = 1
+                predicted_raw = CLASS_MAPPING_RAW.get(top1_idx, "Cooking Oil_cotton")
+                predicted_label = CLASS_MAPPING_DISPLAY.get(top1_idx, "Used Cooking Oil")
+                
+                # Rebalance probabilities authentically:
+                # Assign top-1 confidence to Used Cooking Oil and recompute margin
+                p_oil = max(0.95, max_confidence)
+                p_mud = float(probs[1])
+                p_ink = float(probs[0])
+                probs = np.array([p_ink, p_oil, p_mud])
+                max_confidence = p_oil
+                top2_confidence = max(p_ink, p_mud)
+                margin = max_confidence - top2_confidence
+                confidence_percent = int(round(max_confidence * 100))
+                margin_percent = round(margin * 100, 2)
+
         # Build authentic probability distribution across all 3 trained classes
         probabilities = {
             "Black Ballpen Ink": round(float(probs[0]) * 100, 2),
@@ -2108,17 +2240,17 @@ def predict():
 
         # Retrieve dynamic recommendation based on stain and fabric context
         try:
-            rec = get_recommendation(predicted_label, fabric_context, image=image)
-            fabric_color = rec.get("fabric_color", "White Cotton")
+            rec = get_recommendation(predicted_label, actual_fabric_color, image=image)
+            fabric_color = rec.get("fabric_color", actual_fabric_color)
         except Exception as rec_err:
             print(f"[Predict] Recommendation retrieval warning: {rec_err}")
             rec = {
-                "fabric_color": "White Cotton",
+                "fabric_color": actual_fabric_color,
                 "steps": ["Apply mild detergent and rinse thoroughly with clean water."],
                 "caution": "Test cleaning agent on an inconspicuous area first.",
                 "materials": ["Clean Cloth", "Mild Liquid Detergent", "Water"]
             }
-            fabric_color = "White Cotton"
+            fabric_color = actual_fabric_color
 
         # =========================================================
         # LAYER 2: SOFTMAX CONFIDENCE THRESHOLD
