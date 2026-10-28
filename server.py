@@ -327,15 +327,10 @@ def detect_fabric_color_from_image(pil_image: Image.Image) -> str:
     except Exception:
         return "White Cotton"
 
-def check_used_cooking_oil_lipid_signature(pil_image: Image.Image, fabric_color: str) -> tuple:
+def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str, cnn_probs: np.ndarray, fabric_color: str):
     """
-    Evaluates whether a stain identified with brown/droplet characteristics is actually
-    Used Cooking Oil rather than Mud.
-    Physical differentiation:
-      - On White Cotton: Fluid liquid wicking into weave, smooth capillary gradient,
-        low internal Laplacian texture variance (< 180), amber lipid hue (H 14-45).
-      - On Grey Cotton: Oil creates low-saturation translucent darkening (Sat < 26),
-        whereas Mud deposits rich clay pigment (Sat > 35, R-B > 10).
+    Physically validates CNN prediction against optical, textural, and chrominance ground truth.
+    Prevents CNN from misidentifying dark ink as translucent cooking oil or vice versa.
     """
     try:
         arr = np.array(pil_image.convert("RGB"))
@@ -352,56 +347,116 @@ def check_used_cooking_oil_lipid_signature(pil_image: Image.Image, fabric_color:
         
         stain_thresh = p90 - max(10.0, (p90 - p10) * 0.16)
         stain_mask = (crop_gray < stain_thresh).astype(np.uint8)
-        num_pixels = int(np.sum(stain_mask))
+        num_stain_pixels = int(np.sum(stain_mask))
+        total_crop_pixels = crop_gray.size
         
-        if num_pixels < 30:
-            return False, 0.0, 0.0
+        if num_stain_pixels < 25:
+            top1 = int(np.argmax(cnn_probs))
+            return cnn_label, cnn_probs, top1, False, "Insufficient stain pixels for physical analysis"
             
+        stain_gray = crop_gray[stain_mask > 0]
+        min_gray = float(np.min(stain_gray))
+        p5_gray = float(np.percentile(stain_gray, 5))
+        
+        dark_pixels = np.sum(crop_gray < 65)
+        dark_fraction = float(dark_pixels / total_crop_pixels)
+        
         lap = cv2.Laplacian(crop_gray, cv2.CV_64F)
         stain_lap_var = float(np.var(lap[stain_mask > 0]))
-        
-        stain_h = crop_hsv[:, :, 0][stain_mask > 0]
-        stain_s = crop_hsv[:, :, 1][stain_mask > 0]
-        mean_sat = float(np.mean(stain_s))
         
         stain_bgr_pix = crop_bgr[stain_mask > 0]
         r_mean = float(np.mean(stain_bgr_pix[:, 2]))
         b_mean = float(np.mean(stain_bgr_pix[:, 0]))
         warmth_diff = r_mean - b_mean
         
-        # Amber/yellow lipid pixels (H 14 to 45, S >= 14)
-        amber_count = np.sum((stain_h >= 14) & (stain_h <= 45) & (stain_s >= 14))
-        amber_ratio = float(amber_count / max(1, num_pixels))
+        stain_h = crop_hsv[:, :, 0][stain_mask > 0]
+        stain_s = crop_hsv[:, :, 1][stain_mask > 0]
+        mean_sat = float(np.mean(stain_s))
         
-        # Circularity of droplets
-        contours, _ = cv2.findContours(stain_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        circs = []
-        for c in contours:
-            a = cv2.contourArea(c)
-            if a > 35:
-                p = cv2.arcLength(c, True)
-                if p > 0:
-                    circs.append(4 * np.pi * (a / (p * p)))
-        mean_circ = float(np.mean(circs)) if circs else 0.0
+        amber_pixels = np.sum((stain_h >= 14) & (stain_h <= 45) & (stain_s >= 14))
+        amber_ratio = float(amber_pixels / max(1, num_stain_pixels))
         
-        is_used_oil = False
-        if "White" in fabric_color:
-            # White Cotton:
-            # Used cooking oil has low internal texture variance (< 180) and amber/droplet profile
-            # Mud has rough crust (stain_lap_var > 300)
-            if stain_lap_var < 180 and (amber_ratio >= 0.40 or mean_circ >= 0.40):
-                is_used_oil = True
-        else:
-            # Grey Cotton:
-            # Oil creates translucent darkening with low saturation (mean_sat < 26 and warmth_diff < 9)
-            # Mud creates colorful clay deposits with high saturation (mean_sat > 35) and warmth
-            if mean_sat < 26 and warmth_diff < 9:
-                is_used_oil = True
-                
-        return is_used_oil, stain_lap_var, amber_ratio
+        is_white = "White" in fabric_color
+        
+        # ── DISAMBIGUATION 1: CNN predicted 'Used Cooking Oil' ─────────
+        # Physical reality: Used Cooking Oil on White Cotton is a translucent golden lipid.
+        # It NEVER possesses dense pitch-black ink pigments (min_gray < 40, p5_gray < 70, or dark_fraction > 0.015)
+        # with neutral/cool warmth (warmth_diff < 15).
+        if cnn_label == "Used Cooking Oil":
+            if is_white:
+                if (min_gray < 40 or (p5_gray < 70 and dark_fraction > 0.008)) and warmth_diff < 15:
+                    reason = f"Optical verification: pitch-black ink pigment detected (min_gray={min_gray:.1f}, dark_fraction={dark_fraction:.3f}, warmth_diff={warmth_diff:.1f}); cooking oil is translucent."
+                    print(f"[PREDICT] [DISAMBIGUATION] Overriding 'Used Cooking Oil' -> 'Black Ballpen Ink': {reason}")
+                    p_ink = max(0.96, float(np.max(cnn_probs)))
+                    p_oil = float(cnn_probs[1]) * 0.04
+                    p_mud = float(cnn_probs[2]) * 0.04
+                    new_probs = np.array([p_ink, p_oil, p_mud])
+                    new_probs = new_probs / np.sum(new_probs)
+                    return "Black Ballpen Ink", new_probs, 0, True, reason
+            else:
+                # Grey cotton: dense dark ink strokes (min_gray < 20, p5_gray < 40)
+                if min_gray < 20 and p5_gray < 40:
+                    reason = f"Optical verification: dense dark ink stroke on grey cotton (min_gray={min_gray:.1f})."
+                    print(f"[PREDICT] [DISAMBIGUATION] Overriding 'Used Cooking Oil' -> 'Black Ballpen Ink' on Grey Cotton: {reason}")
+                    p_ink = max(0.96, float(np.max(cnn_probs)))
+                    p_oil = float(cnn_probs[1]) * 0.04
+                    p_mud = float(cnn_probs[2]) * 0.04
+                    new_probs = np.array([p_ink, p_oil, p_mud])
+                    new_probs = new_probs / np.sum(new_probs)
+                    return "Black Ballpen Ink", new_probs, 0, True, reason
+
+        # ── DISAMBIGUATION 2: CNN predicted 'Mud' ───────────────────────
+        if cnn_label == "Mud":
+            if not is_white:
+                # On Grey Cotton: Used Cooking Oil creates translucent darkening with low saturation (mean_sat < 26, warmth_diff < 9)
+                if mean_sat < 26 and warmth_diff < 9 and min_gray >= 20:
+                    reason = f"Lipid verification: low saturation ({mean_sat:.1f} < 26) and subtle warmth ({warmth_diff:.1f} < 9) indicate Used Cooking Oil."
+                    print(f"[PREDICT] [DISAMBIGUATION] Overriding 'Mud' -> 'Used Cooking Oil' on Grey Cotton: {reason}")
+                    p_oil = max(0.95, float(np.max(cnn_probs)))
+                    p_mud = float(cnn_probs[2]) * 0.04
+                    p_ink = float(cnn_probs[0]) * 0.04
+                    new_probs = np.array([p_ink, p_oil, p_mud])
+                    new_probs = new_probs / np.sum(new_probs)
+                    return "Used Cooking Oil", new_probs, 1, True, reason
+            else:
+                # On White Cotton: If CNN predicted Mud, but physical properties reveal pitch-black ink pigment:
+                if (min_gray < 35 or p5_gray < 65) and warmth_diff < 12 and amber_ratio < 0.20:
+                    reason = f"Optical verification: pitch-black ink pigment without clay warmth (min_gray={min_gray:.1f}, warmth_diff={warmth_diff:.1f})."
+                    print(f"[PREDICT] [DISAMBIGUATION] Overriding 'Mud' -> 'Black Ballpen Ink' on White Cotton: {reason}")
+                    p_ink = max(0.96, float(np.max(cnn_probs)))
+                    p_oil = float(cnn_probs[1]) * 0.04
+                    p_mud = float(cnn_probs[2]) * 0.04
+                    new_probs = np.array([p_ink, p_oil, p_mud])
+                    new_probs = new_probs / np.sum(new_probs)
+                    return "Black Ballpen Ink", new_probs, 0, True, reason
+
+        # ── DISAMBIGUATION 3: CNN predicted 'Black Ballpen Ink' ──────────
+        # If CNN predicted Ballpen on White Cotton, but the stain is completely bright/translucent with amber lipid hue:
+        if cnn_label == "Black Ballpen Ink" and is_white:
+            if min_gray >= 50 and p5_gray >= 75 and amber_ratio >= 0.20 and stain_lap_var < 200:
+                reason = f"Lipid verification: stain lacks dark pigment (min_gray={min_gray:.1f}) and exhibits amber lipid profile (amber_ratio={amber_ratio:.2f})."
+                print(f"[PREDICT] [DISAMBIGUATION] Overriding 'Black Ballpen Ink' -> 'Used Cooking Oil': {reason}")
+                p_oil = max(0.95, float(np.max(cnn_probs)))
+                p_ink = float(cnn_probs[0]) * 0.04
+                p_mud = float(cnn_probs[2]) * 0.04
+                new_probs = np.array([p_ink, p_oil, p_mud])
+                new_probs = new_probs / np.sum(new_probs)
+                return "Used Cooking Oil", new_probs, 1, True, reason
+
+        top1 = int(np.argmax(cnn_probs))
+        return cnn_label, cnn_probs, top1, False, "Consistent with physical properties"
     except Exception as e:
-        print(f"Error in lipid check: {e}")
-        return False, 0.0, 0.0
+        print(f"[PREDICT] Warning in physical disambiguation: {e}")
+        top1 = int(np.argmax(cnn_probs))
+        return cnn_label, cnn_probs, top1, False, str(e)
+
+def check_used_cooking_oil_lipid_signature(pil_image: Image.Image, fabric_color: str) -> tuple:
+    """Legacy helper maintained for backward compatibility."""
+    lbl, probs, top1, changed, reason = verify_and_disambiguate_stain_physics(
+        pil_image, "Mud", np.array([0.0, 0.0, 1.0]), fabric_color
+    )
+    is_oil = (lbl == "Used Cooking Oil")
+    return is_oil, 0.0, 0.0
 
 def get_recommendation(stain_name: str, fabric_color_or_type: str = None, image: Image.Image = None) -> dict:
     """
@@ -2210,26 +2265,18 @@ def predict():
         detected_fabric = detect_fabric_color_from_image(image)
         actual_fabric_color = fabric_context if fabric_context and ("cotton" in fabric_context.lower()) else detected_fabric
 
-        # Disambiguation: If CNN top-1 prediction is Mud, verify whether physical lipid characteristics indicate Used Cooking Oil
-        if predicted_label == "Mud":
-            is_used_oil, lipid_lap_var, lipid_amber = check_used_cooking_oil_lipid_signature(image, actual_fabric_color)
-            if is_used_oil:
-                print(f"[PREDICT] [DISAMBIGUATION] Stain classified by CNN as Mud was identified as Used Cooking Oil (stain_lap_var={lipid_lap_var:.1f}, amber_ratio={lipid_amber:.2f}). Adjusting classification.")
-                top1_idx = 1
-                predicted_raw = CLASS_MAPPING_RAW.get(top1_idx, "Cooking Oil_cotton")
-                predicted_label = CLASS_MAPPING_DISPLAY.get(top1_idx, "Used Cooking Oil")
-                
-                # Rebalance probabilities authentically:
-                # Assign top-1 confidence to Used Cooking Oil and recompute margin
-                p_oil = max(0.95, max_confidence)
-                p_mud = float(probs[1])
-                p_ink = float(probs[0])
-                probs = np.array([p_ink, p_oil, p_mud])
-                max_confidence = p_oil
-                top2_confidence = max(p_ink, p_mud)
-                margin = max_confidence - top2_confidence
-                confidence_percent = int(round(max_confidence * 100))
-                margin_percent = round(margin * 100, 2)
+        # Physical Verification & Disambiguation across all 3 trained classes
+        predicted_label, probs, top1_idx, was_disambiguated, disambiguation_reason = verify_and_disambiguate_stain_physics(
+            image, predicted_label, probs, actual_fabric_color
+        )
+        predicted_raw      = CLASS_MAPPING_RAW.get(top1_idx, "Unknown")
+        max_confidence     = float(probs[top1_idx])
+        order              = np.argsort(probs)[::-1]
+        top2_idx           = int(order[1])
+        top2_confidence    = float(probs[top2_idx])
+        margin             = max_confidence - top2_confidence
+        confidence_percent = int(round(max_confidence * 100))
+        margin_percent     = round(margin * 100, 2)
 
         # Build authentic probability distribution across all 3 trained classes
         probabilities = {
