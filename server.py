@@ -359,10 +359,10 @@ def detect_fabric_color_from_image(pil_image: Image.Image) -> str:
         p10 = float(np.percentile(corner_gray, 10))
         spread = p90 - p10
 
-        mean_lum = float(np.mean(corner_gray))
-        is_grey = (spread >= 45.0 and warmth < 18.0) or (warmth < 14.0 and mean_lum < 175.0)
+        is_heather_melange = (spread >= 50.0 and p10 < 130.0)
+        is_neutral_grey    = (warmth <= 6.0 and mean_sat <= 16.0)
 
-        if is_grey:
+        if is_heather_melange or is_neutral_grey:
             return "Grey Cotton"
         else:
             return "White Cotton"
@@ -2002,7 +2002,7 @@ def health_check():
         load_model()
     return jsonify({
         "status": "healthy" if model is not None else "degraded",
-        "version": "v3.5-domain-adapted-perfect-alignment-20261106",
+        "version": "v3.6-fabric-substrate-melange-fix-20261106",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
