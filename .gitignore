@@ -33,3 +33,5 @@ DataSet/
 .env.local
 .env.*.local
 
+scans.json
+*.tmp

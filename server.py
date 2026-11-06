@@ -518,21 +518,21 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         # Physical Signatures Identification:
         # ─────────────────────────────────────────────────────────────────
         # 1. Genuine Black Ballpen Ink:
-        #    Requires blue/black ink clustering with low amber ratio (amber < 0.35)
+        #    Requires blue ink strokes OR genuine dense carbon/nigrosine black lines
         has_ink_clustering = (
-            (ink_density >= 0.005 and ink_count >= 100) or
             (blue_ink_ratio >= 0.005 and ink_count >= 50) or
-            (ink_density >= 0.02)
-        ) and (amber_ratio < 0.35)
+            (blue_ink_ratio >= 0.001 and ink_count >= 10) or
+            (ink_density >= 0.020 and min_gray <= 28) or
+            (ink_density >= 0.015 and min_gray <= 25 and p5_gray <= 45) or
+            (ink_density >= 0.030 and amber_ratio < 0.25)
+        ) and (amber_ratio < 0.30 or blue_ink_ratio >= 0.005)
 
         # 2. Genuine Used Cooking Oil:
-        oil_amber_thresh = 0.12 if is_grey else 0.35
+        oil_amber_thresh = 0.15 if is_grey else 0.30
         is_cooking_oil = (
-            (amber_ratio >= oil_amber_thresh or has_lipid_halo or (is_grey and ink_density < 0.002)) and
-            (blue_ink_ratio < 0.02) and
-            (ink_density < 0.02) and
-            (ink_count < 300) and
-            (deep_opaque_ratio < 0.35 or mean_drop < 55.0)
+            (amber_ratio >= oil_amber_thresh or has_lipid_halo) and
+            (not has_ink_clustering) and
+            (deep_opaque_ratio < 0.40 or mean_drop < 65.0)
         )
 
         # 3. Genuine Mud Signature:
@@ -541,7 +541,7 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         is_soil_crust = (
             (deep_opaque_ratio >= 0.15 or mean_drop >= 35.0) and
             (amber_ratio >= 0.60) and
-            (blue_ink_ratio < 0.02)
+            (not has_ink_clustering)
         )
 
         # ─────────────────────────────────────────────────────────────────
@@ -549,16 +549,15 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         # ─────────────────────────────────────────────────────────────────
         # Case A: CNN predicted Black Ballpen Ink
         if cnn_label == "Black Ballpen Ink":
-            is_lacking_ink = (not has_ink_clustering) and (ink_density < 0.002 and dark_density < 0.008)
-            if (amber_ratio >= 0.35 or is_cooking_oil or is_lacking_ink) and (not has_ink_clustering) and (ink_count < 1200 and ink_density < 0.08):
-                reason = f"Used Cooking Oil Guardrail: Translucent lipid signature ({amber_ratio:.2%}) with lack of ink clustering (ink_count={ink_count}, ink_dens={ink_density:.4f}, blue_ink={blue_ink_ratio:.4f}) overrode Black Ballpen Ink misclassification on {fabric_color}."
+            if is_cooking_oil or ((amber_ratio >= oil_amber_thresh or is_grey) and not has_ink_clustering):
+                reason = f"Used Cooking Oil Guardrail: Translucent lipid amber signature ({amber_ratio:.2%}) with absence of genuine ink strokes (ink_count={ink_count}, blue_ink={blue_ink_ratio:.4f}) overrode Black Ballpen Ink misclassification on {fabric_color}."
                 p_oil = max(0.96, float(np.max(cnn_probs)))
                 p_ink = float(cnn_probs[0]) * 0.04
                 p_mud = float(cnn_probs[2]) * 0.04
                 new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
                 return "Used Cooking Oil", new_probs, 1, True, reason, metrics
             elif has_ink_clustering:
-                reason = f"Black Ballpen Ink Guardrail: Deep blue/black ink clustering verified (ink_density={ink_density:.4f}, ink_count={ink_count})."
+                reason = f"Black Ballpen Ink Guardrail: Deep blue/black ink clustering verified (ink_density={ink_density:.4f}, ink_count={ink_count}, blue_ink={blue_ink_ratio:.4f})."
                 return "Black Ballpen Ink", cnn_probs, 0, False, reason, metrics
             else:
                 return "Black Ballpen Ink", cnn_probs, 0, False, "CNN prediction confirmed by colorimetric analysis", metrics
@@ -1980,6 +1979,7 @@ def health_check():
         load_model()
     return jsonify({
         "status": "healthy" if model is not None else "degraded",
+        "version": "v3.2-grey-cotton-oil-guardrail-20261106",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
@@ -2442,9 +2442,14 @@ def predict():
             "Mud":               round(float(raw_probs[2]) * 100, 2)
         }
 
-        # Fabric Luminance Fix: 90th-percentile highlight check (P90 >= 150 for White Cotton)
+        # Fabric Luminance & Substrate Detection:
         detected_fabric = detect_fabric_color_from_image(image)
-        actual_fabric_color = fabric_context if fabric_context and ("cotton" in fabric_context.lower()) else detected_fabric
+        if fabric_context and ("grey" in fabric_context.lower() or "gray" in fabric_context.lower()):
+            actual_fabric_color = "Grey Cotton"
+        elif fabric_context and ("white" in fabric_context.lower()):
+            actual_fabric_color = "White Cotton"
+        else:
+            actual_fabric_color = detected_fabric
 
         # Multi-Class HSV Colorimetric Guardrails executed deterministically right after CNN inference:
         # 1. Black Ballpen Ink Guardrail (deep blue/black hue clustering, low sat, high dark density)

@@ -12,17 +12,21 @@ user_scans = [
     "scratch/user_scan_0.jpg",
     "scratch/user_scan_1.jpg",
     "scratch/user_scan_2.jpg",
-    "scratch/recent_mobile_scan_2.jpg"
+    "scratch/recent_mobile_scan_2.jpg",
+    "scratch/latest_mobile_scan.jpg",
+    "scratch/scan_147.jpg"
 ]
 
 all_user_passed = True
 for scan_path in user_scans:
     if os.path.exists(scan_path):
         img = Image.open(scan_path)
+        from server import detect_fabric_color_from_image
+        detected_fab = detect_fabric_color_from_image(img)
         lbl, probs, top1, changed, reason, m = verify_and_disambiguate_stain_physics(
-            img, "Black Ballpen Ink", fake_ink_probs, "White Cotton"
+            img, "Black Ballpen Ink", fake_ink_probs, detected_fab
         )
-        print(f"\n[SCAN] {os.path.basename(scan_path)}:")
+        print(f"\n[SCAN] {os.path.basename(scan_path)} (Fabric: {detected_fab}):")
         print(f"  Input CNN: Black Ballpen Ink -> Guardrail Output: {lbl} (changed={changed})")
         print(f"  Reason: {reason}")
         print(f"  Metrics: P90={m['p90']}, amber_ratio={m['amber_ratio']}, ink_density={m['ink_density']}, opaque_ratio={m['opaque_ratio']}, ink_count={m['ink_pixel_count']}")
