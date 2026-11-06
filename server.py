@@ -317,11 +317,10 @@ def normalize_fabric_illumination(img_rgb: np.ndarray, fabric_color: str = "Whit
 
 def detect_fabric_color_from_image(pil_image: Image.Image) -> str:
     """
-    Fabric Luminance Fix:
+    Fabric Luminance & Substrate Analysis:
     Detects whether the cotton garment is White Cotton or Grey Cotton.
-    Replaces naive center-crop mean luminance with a 90th-percentile highlight check
-    (P90 >= 150 for White Cotton) so white shirts aren't mislabeled as grey due to dark stains
-    or shadow gradients.
+    White cotton exhibits high unsoiled highlight luminance (P90 >= 220 and Mean >= 180).
+    Grey cotton garments (even under camera auto-exposure) stay below P90 220 and Mean 180.
     """
     try:
         img = pil_image.convert("RGB")
@@ -337,10 +336,11 @@ def detect_fabric_color_from_image(pil_image: Image.Image) -> str:
         h_crop, w_crop = gray.shape
         crop = gray[int(h_crop * 0.1):int(h_crop * 0.9), int(w_crop * 0.1):int(w_crop * 0.9)]
         
-        # Upper 90th-percentile highlight check representing the unsoiled garment fabric
+        # Upper 90th-percentile highlight check and mean representing unsoiled garment fabric
         p90 = float(np.percentile(crop, 90))
+        mean_lum = float(np.mean(crop))
         
-        if p90 >= 150.0:
+        if p90 >= 220.0 and mean_lum >= 180.0:
             return "White Cotton"
         else:
             return "Grey Cotton"
@@ -512,27 +512,26 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         warmth_diff = metrics["warmth_diff"]
 
         is_white = "White" in fabric_color
+        is_grey = "Grey" in fabric_color
 
         # ─────────────────────────────────────────────────────────────────
         # Physical Signatures Identification:
         # ─────────────────────────────────────────────────────────────────
         # 1. Genuine Black Ballpen Ink:
-        #    Deep blue/black ink clustering (Hue <= 15 or >= 140, dark luminance)
-        #    with ink concentration and low amber ratio (amber_ratio < 0.30)
+        #    Requires blue/black ink clustering with low amber ratio (amber < 0.35)
         has_ink_clustering = (
             (ink_density >= 0.005 and ink_count >= 100) or
             (blue_ink_ratio >= 0.005 and ink_count >= 50) or
             (ink_density >= 0.02)
-        ) and (amber_ratio < 0.30)
+        ) and (amber_ratio < 0.35)
 
         # 2. Genuine Used Cooking Oil:
-        #    Amber/gold hue signatures (12-48 deg) spanning >= 35% of stain region or lipid halo,
-        #    lacking concentrated ink pigment.
+        oil_amber_thresh = 0.12 if is_grey else 0.35
         is_cooking_oil = (
-            (amber_ratio >= 0.35 or has_lipid_halo) and
+            (amber_ratio >= oil_amber_thresh or has_lipid_halo or (is_grey and ink_density < 0.002)) and
             (blue_ink_ratio < 0.02) and
             (ink_density < 0.02) and
-            (ink_count < 200) and
+            (ink_count < 300) and
             (deep_opaque_ratio < 0.35 or mean_drop < 55.0)
         )
 
@@ -550,9 +549,9 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         # ─────────────────────────────────────────────────────────────────
         # Case A: CNN predicted Black Ballpen Ink
         if cnn_label == "Black Ballpen Ink":
-            # Override to Used Cooking Oil if stain exhibits amber/gold lipid signature and lacks ink clustering
-            if (amber_ratio >= 0.35 or is_cooking_oil) and (not has_ink_clustering) and (ink_count < 1200 and ink_density < 0.08):
-                reason = f"Used Cooking Oil Guardrail: Amber/gold lipid signature ({amber_ratio:.2%}) with lack of ink clustering (ink_count={ink_count}, blue_ink={blue_ink_ratio:.4f}) overrode Black Ballpen Ink misclassification."
+            is_lacking_ink = (not has_ink_clustering) and (ink_density < 0.002 and dark_density < 0.008)
+            if (amber_ratio >= 0.35 or is_cooking_oil or is_lacking_ink) and (not has_ink_clustering) and (ink_count < 1200 and ink_density < 0.08):
+                reason = f"Used Cooking Oil Guardrail: Translucent lipid signature ({amber_ratio:.2%}) with lack of ink clustering (ink_count={ink_count}, ink_dens={ink_density:.4f}, blue_ink={blue_ink_ratio:.4f}) overrode Black Ballpen Ink misclassification on {fabric_color}."
                 p_oil = max(0.96, float(np.max(cnn_probs)))
                 p_ink = float(cnn_probs[0]) * 0.04
                 p_mud = float(cnn_probs[2]) * 0.04
