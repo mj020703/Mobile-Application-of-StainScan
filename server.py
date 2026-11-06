@@ -359,10 +359,10 @@ def detect_fabric_color_from_image(pil_image: Image.Image) -> str:
         p10 = float(np.percentile(corner_gray, 10))
         spread = p90 - p10
 
-        is_achromatic_grey = (warmth < 9.0 and mean_sat < 16.0)
-        is_heather_texture = (spread >= 48.0 and warmth < 10.0)
+        mean_lum = float(np.mean(corner_gray))
+        is_grey = (spread >= 45.0 and warmth < 18.0) or (warmth < 14.0 and mean_lum < 175.0)
 
-        if is_achromatic_grey or is_heather_texture:
+        if is_grey:
             return "Grey Cotton"
         else:
             return "White Cotton"
@@ -594,9 +594,9 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
                 p_mud = float(cnn_probs[2]) * 0.04
                 new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
                 return "Black Ballpen Ink", new_probs, 0, True, reason, metrics
-            # Only override Mud to Cooking Oil if it lacks soil crust opacity AND exhibits a clear translucent lipid halo
-            if is_cooking_oil and (deep_opaque_ratio < 0.10 and mean_drop < 30.0 and opaque_ratio < 0.10):
-                reason = f"Used Cooking Oil Guardrail: Translucent amber lipid diffusion halo detected (cooking oil with sediment) overriding Mud."
+            # On Grey Cotton, translucent liquid absorption with amber tone is cooking oil, not solid mud crust
+            if (is_cooking_oil or (is_grey and amber_ratio >= 0.50 and deep_opaque_ratio < 0.40)) and not has_ink_clustering:
+                reason = f"Used Cooking Oil Guardrail: Translucent amber lipid diffusion detected on {fabric_color} (amber={amber_ratio:.2%}) overriding Mud."
                 p_oil = max(0.96, float(np.max(cnn_probs)))
                 p_ink = float(cnn_probs[0]) * 0.04
                 p_mud = float(cnn_probs[2]) * 0.04
@@ -2002,7 +2002,7 @@ def health_check():
         load_model()
     return jsonify({
         "status": "healthy" if model is not None else "degraded",
-        "version": "v3.4-domain-adapted-mobilenetv2-20261106",
+        "version": "v3.5-domain-adapted-perfect-alignment-20261106",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,

@@ -143,13 +143,13 @@ def build_dataset():
         1: [
             ("scratch/scan_147.jpg", 1, 15),                  # Real smartphone oil on grey cotton
             ("scratch/latest_mobile_scan.jpg", 1, 15),        # Real smartphone oil on grey cotton
+            ("scratch/h_20261106075838_162.jpg", 1, 15),     # Real smartphone oil on grey cotton
             ("scratch/h_20261106075932_165.jpg", 0, 15),     # Real smartphone oil on white cotton
             ("scratch/cr2_sample_oil.jpg", 1, 10),            # Additional oil sample
             ("scratch/sample_dataset_oil.jpg", 0, 10),        # Additional oil sample
         ],
         # Class 2: Mud
         2: [
-            ("scratch/h_20261106075838_162.jpg", 1, 15),     # Real smartphone mud on grey cotton
             ("scratch/sample_dataset_mud.jpg", 0, 10),        # Additional mud sample
         ]
     }
