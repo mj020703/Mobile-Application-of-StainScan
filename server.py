@@ -27,6 +27,10 @@ from pymongo.errors import (
 )
 import certifi
 import numpy as np
+import threading
+import gc
+
+INFERENCE_LOCK = threading.Lock()
 
 CV2_AVAILABLE = False
 try:
@@ -317,35 +321,53 @@ def normalize_fabric_illumination(img_rgb: np.ndarray, fabric_color: str = "Whit
 
 def detect_fabric_color_from_image(pil_image: Image.Image) -> str:
     """
-    Fabric Luminance & Substrate Analysis:
-    Detects whether the cotton garment is White Cotton or Grey Cotton.
-    White cotton exhibits high unsoiled highlight luminance (P90 >= 220 and Mean >= 180).
-    Grey cotton garments (even under camera auto-exposure) stay below P90 220 and Mean 180.
+    Robust Fabric Substrate Detection (White Cotton vs Grey Cotton):
+    Analyzes the unsoiled border/corner regions of the cotton garment:
+    - Heather Grey Cotton: Achromatic neutral gray (Warmth = R_mean - B_mean < 9.0, Saturation < 16.0)
+      or characteristic melange fiber texture (P90 - P10 spread >= 48 with Warmth < 10.0).
+    - White Cotton: Retains natural warm/cream cotton undertone (Warmth >= 9.0 or Saturation >= 16.0)
+      and/or high highlight luminance (P90 >= 215).
     """
     try:
-        img = pil_image.convert("RGB")
-        w, h = img.size
-        if max(w, h) > 800:
-            scale = 800.0 / max(w, h)
-            img = img.resize((int(w * scale), int(h * scale)), Image.BILINEAR)
+        img_rgb = pil_image.convert("RGB")
+        w, h = img_rgb.size
+        if max(w, h) > 600:
+            scale = 600.0 / max(w, h)
+            img_rgb = img_rgb.resize((int(w * scale), int(h * scale)), Image.BILINEAR)
 
-        arr = np.array(img)
-        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-        
-        # Take central 80% to avoid extreme image borders / table surfaces
-        h_crop, w_crop = gray.shape
-        crop = gray[int(h_crop * 0.1):int(h_crop * 0.9), int(w_crop * 0.1):int(w_crop * 0.9)]
-        
-        # Upper 90th-percentile highlight check and mean representing unsoiled garment fabric
-        p90 = float(np.percentile(crop, 90))
-        mean_lum = float(np.mean(crop))
-        
-        if p90 >= 220.0 and mean_lum >= 180.0:
-            return "White Cotton"
-        else:
+        arr = np.array(img_rgb)
+        h_arr, w_arr = arr.shape[:2]
+        cw, ch = max(5, int(w_arr * 0.15)), max(5, int(h_arr * 0.15))
+        corners = [
+            arr[0:ch, 0:cw],
+            arr[0:ch, w_arr-cw:w_arr],
+            arr[h_arr-ch:h_arr, 0:cw],
+            arr[h_arr-ch:h_arr, w_arr-cw:w_arr]
+        ]
+        corner_pixels = np.concatenate([c.reshape(-1, 3) for c in corners], axis=0).astype(float)
+        r = corner_pixels[:, 0]
+        g = corner_pixels[:, 1]
+        b = corner_pixels[:, 2]
+
+        corner_bgr = cv2.cvtColor(np.concatenate(corners, axis=0), cv2.COLOR_RGB2BGR) if (CV2_AVAILABLE and cv2 is not None) else None
+        corner_hsv = cv2.cvtColor(corner_bgr, cv2.COLOR_BGR2HSV) if corner_bgr is not None else None
+        corner_gray = cv2.cvtColor(corner_bgr, cv2.COLOR_BGR2GRAY) if corner_bgr is not None else (0.299 * r + 0.587 * g + 0.114 * b)
+
+        mean_sat = float(np.mean(corner_hsv[:, :, 1])) if corner_hsv is not None else float(np.std([r, g, b]))
+        warmth = float(np.mean(r) - np.mean(b))
+        p90 = float(np.percentile(corner_gray, 90))
+        p10 = float(np.percentile(corner_gray, 10))
+        spread = p90 - p10
+
+        is_achromatic_grey = (warmth < 9.0 and mean_sat < 16.0)
+        is_heather_texture = (spread >= 48.0 and warmth < 10.0)
+
+        if is_achromatic_grey or is_heather_texture:
             return "Grey Cotton"
+        else:
+            return "White Cotton"
     except Exception as e:
-        print(f"[Fabric Detection] Warning in luminance check: {e}")
+        print(f"[Fabric Detection] Warning in substrate check: {e}")
         return "White Cotton"
 
 def analyze_stain_colorimetry(pil_image: Image.Image, fabric_color: str = "White Cotton") -> dict:
@@ -539,9 +561,10 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         #    Soil signatures with high particle opacity, substantial luminance drop,
         #    irregular crust boundary, and absence of blue ink.
         is_soil_crust = (
-            (deep_opaque_ratio >= 0.15 or mean_drop >= 35.0) and
-            (amber_ratio >= 0.60) and
-            (not has_ink_clustering)
+            (deep_opaque_ratio >= 0.45 or mean_drop >= 55.0) and
+            (amber_ratio >= 0.65) and
+            (not has_ink_clustering) and
+            (not is_grey)
         )
 
         # ─────────────────────────────────────────────────────────────────
@@ -592,7 +615,7 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
                 p_mud = float(cnn_probs[2]) * 0.04
                 new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
                 return "Black Ballpen Ink", new_probs, 0, True, reason, metrics
-            if is_soil_crust and (deep_opaque_ratio >= 0.25 and mean_drop >= 45.0 and crust_irregularity >= 0.70) and (not has_lipid_halo):
+            if is_soil_crust and (deep_opaque_ratio >= 0.55 and opaque_ratio >= 0.85 and not is_grey) and (not has_lipid_halo):
                 reason = f"Mud Guardrail override: High opacity earthy soil crust detected ({amber_ratio:.2%}) overriding Cooking Oil."
                 p_mud = max(0.96, float(np.max(cnn_probs)))
                 p_ink = float(cnn_probs[0]) * 0.04
@@ -1979,7 +2002,7 @@ def health_check():
         load_model()
     return jsonify({
         "status": "healthy" if model is not None else "degraded",
-        "version": "v3.2-grey-cotton-oil-guardrail-20261106",
+        "version": "v3.3-fabric-chromaticity-and-memory-lock-20261106",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
@@ -2413,10 +2436,11 @@ def predict():
                 "details": str(prep_err)
             }), 500
 
-        # Run real TensorFlow CNN inference
+        # Run real TensorFlow CNN inference (serialized with lock to prevent memory spikes on free tier)
         try:
-            predictions = model.predict(input_arr, verbose=0)  # (1, 3) softmax probabilities
-            probs       = predictions[0]                        # (3,)
+            with INFERENCE_LOCK:
+                predictions = model.predict(input_arr, verbose=0)  # (1, 3) softmax probabilities
+                probs       = predictions[0]                        # (3,)
         except Exception as inf_err:
             print(f"[Predict] Model inference error: {inf_err}\n{traceback.format_exc()}")
             return jsonify({

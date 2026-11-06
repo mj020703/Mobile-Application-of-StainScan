@@ -11,10 +11,11 @@ fake_ink_probs = np.array([0.96, 0.02, 0.02])
 user_scans = [
     "scratch/user_scan_0.jpg",
     "scratch/user_scan_1.jpg",
-    "scratch/user_scan_2.jpg",
     "scratch/recent_mobile_scan_2.jpg",
     "scratch/latest_mobile_scan.jpg",
-    "scratch/scan_147.jpg"
+    "scratch/scan_147.jpg",
+    "scratch/h_20261106075932_165.jpg",
+    "scratch/h_20261106075838_162.jpg"
 ]
 
 all_user_passed = True

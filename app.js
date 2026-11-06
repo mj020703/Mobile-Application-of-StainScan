@@ -1145,8 +1145,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const img = new Image();
             img.onload = () => {
                 const canvas = document.createElement("canvas");
-                // High-resolution mobile capture: preserve micro-textures for CNN accuracy
-                const max_size = 1024;
+                // Optimized mobile capture: 640px preserves high CNN texture details while preventing server OOM memory spikes
+                const max_size = 640;
                 let width = img.width;
                 let height = img.height;
 
