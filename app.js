@@ -1145,7 +1145,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const img = new Image();
             img.onload = () => {
                 const canvas = document.createElement("canvas");
-                const max_size = 300;
+                // High-resolution mobile capture: preserve micro-textures for CNN accuracy
+                const max_size = 1024;
                 let width = img.width;
                 let height = img.height;
 
@@ -1164,9 +1165,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 canvas.width = width;
                 canvas.height = height;
                 const ctx = canvas.getContext("2d");
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = "high";
                 ctx.drawImage(img, 0, 0, width, height);
 
-                selectedImageBase64 = canvas.toDataURL("image/jpeg", 0.8);
+                // High quality JPEG (0.92) to retain ink lines and translucent oil halos
+                selectedImageBase64 = canvas.toDataURL("image/jpeg", 0.92);
                 uploadedImagePreview.src = selectedImageBase64;
                 uploadEmptyState.style.display = "none";
                 uploadPreviewState.style.display = "block";

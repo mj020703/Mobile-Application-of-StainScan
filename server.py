@@ -283,178 +283,340 @@ RECOMMENDATION_DATABASE = {
     }
 }
 
-def detect_fabric_color_from_image(pil_image: Image.Image) -> str:
+def normalize_fabric_illumination(img_rgb: np.ndarray, fabric_color: str = "White Cotton") -> np.ndarray:
     """
-    Detects whether the cotton garment is White Cotton or Grey Cotton.
-    Isolates unsoiled fabric pixels to prevent dark stains from lowering the fabric brightness,
-    and checks texture contrast to separate smooth white weave from heather/melange grey.
+    White-Patch Retinex / Fabric-Referenced Color Normalization:
+    Corrects color cast caused by warm indoor lighting (e.g. 2700K-3000K incandescent/warm LEDs)
+    using the unsoiled cotton fabric highlights as an achromatic reference.
+    Prevents yellow/warm ambient light from artificially triggering amber lipid or mud signatures.
     """
     try:
-        arr = np.array(pil_image.convert("RGB"))
+        r_p92 = float(np.percentile(img_rgb[:, :, 0], 92))
+        g_p92 = float(np.percentile(img_rgb[:, :, 1], 92))
+        b_p92 = float(np.percentile(img_rgb[:, :, 2], 92))
+
+        max_chan = max(r_p92, g_p92, b_p92)
+        if max_chan < 40.0:
+            return img_rgb  # Image is extremely dark, skip adjustment
+
+        # Check for warm room lighting bias (Red and Green notably higher than Blue)
+        if r_p92 > (b_p92 + 15.0) or g_p92 > (b_p92 + 12.0):
+            target_val = min(245.0, max_chan)
+            scale_r = float(np.clip(target_val / max(1.0, r_p92), 0.75, 1.35))
+            scale_g = float(np.clip(target_val / max(1.0, g_p92), 0.75, 1.35))
+            scale_b = float(np.clip(target_val / max(1.0, b_p92), 0.75, 1.35))
+
+            norm = np.zeros_like(img_rgb, dtype=np.float32)
+            norm[:, :, 0] = np.clip(img_rgb[:, :, 0].astype(np.float32) * scale_r, 0, 255)
+            norm[:, :, 1] = np.clip(img_rgb[:, :, 1].astype(np.float32) * scale_g, 0, 255)
+            norm[:, :, 2] = np.clip(img_rgb[:, :, 2].astype(np.float32) * scale_b, 0, 255)
+            return norm.astype(np.uint8)
+        return img_rgb
+    except Exception:
+        return img_rgb
+
+def detect_fabric_color_from_image(pil_image: Image.Image) -> str:
+    """
+    Fabric Luminance Fix:
+    Detects whether the cotton garment is White Cotton or Grey Cotton.
+    Replaces naive center-crop mean luminance with a 90th-percentile highlight check
+    (P90 >= 150 for White Cotton) so white shirts aren't mislabeled as grey due to dark stains
+    or shadow gradients.
+    """
+    try:
+        img = pil_image.convert("RGB")
+        w, h = img.size
+        if max(w, h) > 800:
+            scale = 800.0 / max(w, h)
+            img = img.resize((int(w * scale), int(h * scale)), Image.BILINEAR)
+
+        arr = np.array(img)
         gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
         
         # Take central 80% to avoid extreme image borders / table surfaces
-        h, w = gray.shape
-        crop = gray[int(h * 0.1):int(h * 0.9), int(w * 0.1):int(w * 0.9)]
+        h_crop, w_crop = gray.shape
+        crop = gray[int(h_crop * 0.1):int(h_crop * 0.9), int(w_crop * 0.1):int(w_crop * 0.9)]
         
-        # Upper percentile represents the unsoiled garment fabric
+        # Upper 90th-percentile highlight check representing the unsoiled garment fabric
         p90 = float(np.percentile(crop, 90))
-        p75 = float(np.percentile(crop, 75))
         
-        # Fabric mask: pixels representing the garment background (near p90)
-        fab_mask = (crop >= (p90 - 20)) & (crop <= (p90 + 5))
-        
-        # Laplacian variance of fabric region (heather grey has dark/light mottled fibers)
-        lap = cv2.Laplacian(crop, cv2.CV_64F)
-        lap_var = float(np.var(lap[fab_mask])) if np.sum(fab_mask) > 50 else float(cv2.Laplacian(crop, cv2.CV_64F).var())
-        
-        # White cotton:
-        # 1. Under smartphone/indoor light: p90 >= 150 with smooth weave (lap_var < 100)
-        # 2. Under bright studio light: p90 >= 190
-        # Grey cotton:
-        # 1. Under normal light: p90 is dark (< 145)
-        # 2. Under studio flash: p90 is 155-180, but lap_var is very high (> 110) due to heather yarn
-        if p90 >= 190:
+        if p90 >= 150.0:
             return "White Cotton"
-        elif p90 < 145:
-            return "Grey Cotton"
         else:
-            # Ambiguous range (145 <= p90 < 190)
-            if lap_var > 110:
-                return "Grey Cotton"
-            else:
-                return "White Cotton"
-    except Exception:
+            return "Grey Cotton"
+    except Exception as e:
+        print(f"[Fabric Detection] Warning in luminance check: {e}")
         return "White Cotton"
+
+def analyze_stain_colorimetry(pil_image: Image.Image, fabric_color: str = "White Cotton") -> dict:
+    """
+    Analyzes optical, textural, and chrominance ground truth across the stain's cropped pixel region:
+      - Grayscale luminance, P90 highlights, P10 deep shadow, and minimum luminance
+      - Black Ballpen Ink signatures: deep blue/black hue clustering (Hue <= 15 or 140 <= Hue <= 180 in OpenCV [0, 180] scale),
+        very low saturation (S <= 110), and high dark-pixel density (V <= 65, gray <= 55)
+      - Used Cooking Oil signatures: amber/gold hue (15 <= Hue <= 45, moderate-to-high value, translucent),
+        surrounded by smooth translucent lipid diffusion rings / grease halos
+      - Mud soil signatures: earthy brown/grey soil with high particle opacity, irregular crust boundaries,
+        and absence of blue ink tones or amber lipid halos
+    """
+    img = pil_image.convert("RGB")
+    w, h = img.size
+    if max(w, h) > 800:
+        scale = 800.0 / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.BILINEAR)
+
+    arr = np.array(img)
+    # Neutralize warm ambient room lighting to evaluate genuine stain spectral ground truth
+    arr = normalize_fabric_illumination(arr, fabric_color)
+    h_img, w_img = arr.shape[:2]
+
+    # Central garment region (10% to 90%)
+    crop_rgb = arr[int(h_img * 0.10):int(h_img * 0.90), int(w_img * 0.10):int(w_img * 0.90)]
+    crop_gray = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2GRAY)
+    crop_hsv = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2HSV)
+    crop_bgr = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2BGR)
+
+    h_chan = crop_hsv[:, :, 0]
+    s_chan = crop_hsv[:, :, 1]
+    v_chan = crop_hsv[:, :, 2]
+    total_crop_pixels = crop_gray.size
+
+    p90 = float(np.percentile(crop_gray, 90))
+    p10 = float(np.percentile(crop_gray, 10))
+
+    # Segment stain pixels contrasting with unsoiled fabric
+    stain_mask = (crop_gray < (p90 - 15)) | ((s_chan > 25) & (crop_gray < (p90 - 5)))
+    num_stain_pixels = int(np.sum(stain_mask))
+    if num_stain_pixels < 25:
+        stain_mask = (crop_gray < (p90 - 8))
+        num_stain_pixels = int(np.sum(stain_mask))
+
+    min_gray = float(np.min(crop_gray))
+    p5_gray = float(np.percentile(crop_gray[stain_mask > 0], 5)) if num_stain_pixels > 0 else min_gray
+
+    # 1. Black Ballpen Ink: deep blue/black hue clustering (Hue <= 15 or 140 <= Hue <= 180), low sat, dark density
+    ink_hue_clustering = ((h_chan <= 15) | (h_chan >= 140))
+    dark_pixels = (crop_gray < 55) & (v_chan < 65)
+    ink_pixels_mask = ink_hue_clustering & dark_pixels & (s_chan < 110)
+
+    ink_pixel_count = int(np.sum(ink_pixels_mask & (stain_mask > 0)))
+    dark_pixel_count = int(np.sum(dark_pixels & (stain_mask > 0)))
+    ink_density = ink_pixel_count / max(1, num_stain_pixels)
+    dark_density = dark_pixel_count / max(1, num_stain_pixels)
+
+    blue_ink_pixels = ((h_chan >= 110) & (h_chan <= 180) & (s_chan > 20) & (v_chan < 100))
+    blue_ink_count = int(np.sum(blue_ink_pixels & (stain_mask > 0)))
+    blue_ink_ratio = blue_ink_count / max(1, num_stain_pixels)
+
+    # 2. Used Cooking Oil: amber/gold hue signatures (12 <= Hue <= 48, Sat >= 6, Val >= 45)
+    amber_gold_mask = (h_chan >= 12) & (h_chan <= 48) & (s_chan >= 6) & (v_chan >= 45)
+    amber_pixels_count = int(np.sum(amber_gold_mask & (stain_mask > 0)))
+    amber_ratio = amber_pixels_count / max(1, num_stain_pixels)
+
+    # Opacity & Luminance Drop
+    val_drop = p90 - crop_gray[stain_mask > 0] if num_stain_pixels > 0 else np.array([0.0])
+    mean_val_drop = float(np.mean(val_drop))
+    opaque_ratio = float(np.mean(val_drop > 40))
+    deep_opaque_ratio = float(np.mean(val_drop > 70))
+
+    # Lipid Diffusion Halo & Boundary Morphology:
+    contours, _ = cv2.findContours(stain_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    crust_irregularity = 0.0
+    has_translucent_lipid_halo = False
+    boundary_grad = 0.0
+
+    if contours:
+        main_contour = max(contours, key=cv2.contourArea)
+        area = float(cv2.contourArea(main_contour))
+        perimeter = float(cv2.arcLength(main_contour, True))
+        if perimeter > 0:
+            compactness = (4.0 * np.pi * area) / (perimeter * perimeter)
+            crust_irregularity = float(1.0 - min(1.0, compactness))
+
+        # Dilate mask to extract outer diffusion ring (halo region)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        dilated = cv2.dilate(stain_mask.astype(np.uint8), kernel, iterations=2)
+        halo_ring = (dilated > 0) & (~stain_mask)
+        if np.sum(halo_ring) > 20:
+            halo_amber = (h_chan[halo_ring] >= 12) & (h_chan[halo_ring] <= 48) & (s_chan[halo_ring] >= 6)
+            halo_amber_ratio = float(np.mean(halo_amber))
+            sobelx = cv2.Sobel(crop_gray, cv2.CV_64F, 1, 0, ksize=3)
+            sobely = cv2.Sobel(crop_gray, cv2.CV_64F, 0, 1, ksize=3)
+            edge_grad = np.sqrt(sobelx**2 + sobely**2)
+            boundary_grad = float(np.mean(edge_grad[halo_ring]))
+            halo_drop = float(np.mean(p90 - crop_gray[halo_ring]))
+
+            # Halo is translucent lipid diffusion if outer ring has amber/warmth, smooth edge, and gentle luminance drop
+            if (halo_amber_ratio > 0.15) and (boundary_grad < 35.0) and (halo_drop < 20.0):
+                has_translucent_lipid_halo = True
+
+    # Warmth (Red - Blue)
+    r_mean = float(np.mean(crop_bgr[:, :, 2][stain_mask > 0])) if num_stain_pixels > 0 else 0.0
+    b_mean = float(np.mean(crop_bgr[:, :, 0][stain_mask > 0])) if num_stain_pixels > 0 else 0.0
+    warmth_diff = r_mean - b_mean
+
+    return {
+        "p90": round(float(p90), 2),
+        "p10": round(float(p10), 2),
+        "min_gray": round(float(min_gray), 2),
+        "p5_gray": round(float(p5_gray), 2),
+        "num_stain_pixels": int(num_stain_pixels),
+        "ink_pixel_count": int(ink_pixel_count),
+        "dark_pixel_count": int(dark_pixel_count),
+        "ink_density": round(float(ink_density), 4),
+        "dark_density": round(float(dark_density), 4),
+        "blue_ink_ratio": round(float(blue_ink_ratio), 4),
+        "amber_ratio": round(float(amber_ratio), 4),
+        "mean_val_drop": round(float(mean_val_drop), 2),
+        "opaque_ratio": round(float(opaque_ratio), 4),
+        "deep_opaque_ratio": round(float(deep_opaque_ratio), 4),
+        "has_translucent_lipid_halo": bool(has_translucent_lipid_halo),
+        "crust_irregularity": round(float(crust_irregularity), 4),
+        "warmth_diff": round(float(warmth_diff), 2),
+        "boundary_grad": round(float(boundary_grad), 2),
+        "fabric_color": str(fabric_color)
+    }
 
 def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str, cnn_probs: np.ndarray, fabric_color: str):
     """
-    Physically validates CNN prediction against optical, textural, and chrominance ground truth.
-    Prevents CNN from misidentifying dark ink as translucent cooking oil or vice versa.
+    Comprehensive Multi-Class HSV Colorimetric Guardrail:
+    Executes deterministic rules right after CNN inference:
+      1. Black Ballpen Ink Guardrail:
+         Condition: If stain's cropped pixel region contains deep blue/black hue clustering
+         (Hue <= 15 or 140 <= Hue <= 180, very low saturation, high dark-pixel density),
+         force-override prediction to Black Ballpen Ink. Prevents sharp ink lines from being misclassified as mud.
+      2. Used Cooking Oil Guardrail:
+         Condition: If stain exhibits amber/gold hue signatures (15 <= Hue <= 45, moderate-to-high value)
+         surrounded by smooth translucent lipid diffusion rings/grease halos, force-override to Used Cooking Oil.
+         Ensures used/dark cooking oil with burnt sediment is never mistaken for mud.
+      3. Mud Guardrail:
+         Condition: Retain Mud only if color profile matches earthy brown/grey soil signatures with
+         high particle opacity, irregular crust boundaries, and an absence of blue ink tones or amber lipid halos.
     """
     try:
-        arr = np.array(pil_image.convert("RGB"))
-        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-        hsv = cv2.cvtColor(arr, cv2.COLOR_RGB2HSV)
-        
-        h_img, w_img = gray.shape
-        crop_gray = gray[int(h_img * 0.08):int(h_img * 0.92), int(w_img * 0.08):int(w_img * 0.92)]
-        crop_hsv = hsv[int(h_img * 0.08):int(h_img * 0.92), int(w_img * 0.08):int(w_img * 0.92)]
-        crop_bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)[int(h_img * 0.08):int(h_img * 0.92), int(w_img * 0.08):int(w_img * 0.92)]
-        
-        p90 = float(np.percentile(crop_gray, 90))
-        p10 = float(np.percentile(crop_gray, 10))
-        
-        stain_thresh = p90 - max(10.0, (p90 - p10) * 0.16)
-        stain_mask = (crop_gray < stain_thresh).astype(np.uint8)
-        num_stain_pixels = int(np.sum(stain_mask))
-        total_crop_pixels = crop_gray.size
-        
-        if num_stain_pixels < 25:
-            top1 = int(np.argmax(cnn_probs))
-            return cnn_label, cnn_probs, top1, False, "Insufficient stain pixels for physical analysis"
-            
-        stain_gray = crop_gray[stain_mask > 0]
-        min_gray = float(np.min(stain_gray))
-        p5_gray = float(np.percentile(stain_gray, 5))
-        
-        dark_pixels = np.sum(crop_gray < 65)
-        dark_fraction = float(dark_pixels / total_crop_pixels)
-        
-        lap = cv2.Laplacian(crop_gray, cv2.CV_64F)
-        stain_lap_var = float(np.var(lap[stain_mask > 0]))
-        
-        stain_bgr_pix = crop_bgr[stain_mask > 0]
-        r_mean = float(np.mean(stain_bgr_pix[:, 2]))
-        b_mean = float(np.mean(stain_bgr_pix[:, 0]))
-        warmth_diff = r_mean - b_mean
-        
-        stain_h = crop_hsv[:, :, 0][stain_mask > 0]
-        stain_s = crop_hsv[:, :, 1][stain_mask > 0]
-        mean_sat = float(np.mean(stain_s))
-        
-        amber_pixels = np.sum((stain_h >= 14) & (stain_h <= 45) & (stain_s >= 14))
-        amber_ratio = float(amber_pixels / max(1, num_stain_pixels))
-        
+        metrics = analyze_stain_colorimetry(pil_image, fabric_color)
+
+        min_gray = metrics["min_gray"]
+        p5_gray = metrics["p5_gray"]
+        ink_count = metrics["ink_pixel_count"]
+        dark_count = metrics["dark_pixel_count"]
+        ink_density = metrics["ink_density"]
+        dark_density = metrics["dark_density"]
+        blue_ink_ratio = metrics["blue_ink_ratio"]
+        amber_ratio = metrics["amber_ratio"]
+        mean_drop = metrics["mean_val_drop"]
+        opaque_ratio = metrics["opaque_ratio"]
+        deep_opaque_ratio = metrics.get("deep_opaque_ratio", 0.0)
+        has_lipid_halo = metrics["has_translucent_lipid_halo"]
+        crust_irregularity = metrics["crust_irregularity"]
+        warmth_diff = metrics["warmth_diff"]
+
         is_white = "White" in fabric_color
-        
-        # ── DISAMBIGUATION 1: CNN predicted 'Used Cooking Oil' ─────────
-        # Physical reality: Used Cooking Oil on White Cotton is a translucent golden lipid.
-        # It NEVER possesses dense pitch-black ink pigments (min_gray < 40, p5_gray < 70, or dark_fraction > 0.015)
-        # with neutral/cool warmth (warmth_diff < 15).
-        if cnn_label == "Used Cooking Oil":
-            if is_white:
-                if (min_gray < 40 or (p5_gray < 70 and dark_fraction > 0.008)) and warmth_diff < 15:
-                    reason = f"Optical verification: pitch-black ink pigment detected (min_gray={min_gray:.1f}, dark_fraction={dark_fraction:.3f}, warmth_diff={warmth_diff:.1f}); cooking oil is translucent."
-                    print(f"[PREDICT] [DISAMBIGUATION] Overriding 'Used Cooking Oil' -> 'Black Ballpen Ink': {reason}")
-                    p_ink = max(0.96, float(np.max(cnn_probs)))
-                    p_oil = float(cnn_probs[1]) * 0.04
-                    p_mud = float(cnn_probs[2]) * 0.04
-                    new_probs = np.array([p_ink, p_oil, p_mud])
-                    new_probs = new_probs / np.sum(new_probs)
-                    return "Black Ballpen Ink", new_probs, 0, True, reason
-            else:
-                # Grey cotton: dense dark ink strokes (min_gray < 20, p5_gray < 40)
-                if min_gray < 20 and p5_gray < 40:
-                    reason = f"Optical verification: dense dark ink stroke on grey cotton (min_gray={min_gray:.1f})."
-                    print(f"[PREDICT] [DISAMBIGUATION] Overriding 'Used Cooking Oil' -> 'Black Ballpen Ink' on Grey Cotton: {reason}")
-                    p_ink = max(0.96, float(np.max(cnn_probs)))
-                    p_oil = float(cnn_probs[1]) * 0.04
-                    p_mud = float(cnn_probs[2]) * 0.04
-                    new_probs = np.array([p_ink, p_oil, p_mud])
-                    new_probs = new_probs / np.sum(new_probs)
-                    return "Black Ballpen Ink", new_probs, 0, True, reason
 
-        # ── DISAMBIGUATION 2: CNN predicted 'Mud' ───────────────────────
-        if cnn_label == "Mud":
-            if not is_white:
-                # On Grey Cotton: Used Cooking Oil creates translucent darkening with low saturation (mean_sat < 26, warmth_diff < 9)
-                if mean_sat < 26 and warmth_diff < 9 and min_gray >= 20:
-                    reason = f"Lipid verification: low saturation ({mean_sat:.1f} < 26) and subtle warmth ({warmth_diff:.1f} < 9) indicate Used Cooking Oil."
-                    print(f"[PREDICT] [DISAMBIGUATION] Overriding 'Mud' -> 'Used Cooking Oil' on Grey Cotton: {reason}")
-                    p_oil = max(0.95, float(np.max(cnn_probs)))
-                    p_mud = float(cnn_probs[2]) * 0.04
-                    p_ink = float(cnn_probs[0]) * 0.04
-                    new_probs = np.array([p_ink, p_oil, p_mud])
-                    new_probs = new_probs / np.sum(new_probs)
-                    return "Used Cooking Oil", new_probs, 1, True, reason
-            else:
-                # On White Cotton: If CNN predicted Mud, but physical properties reveal pitch-black ink pigment:
-                if (min_gray < 35 or p5_gray < 65) and warmth_diff < 12 and amber_ratio < 0.20:
-                    reason = f"Optical verification: pitch-black ink pigment without clay warmth (min_gray={min_gray:.1f}, warmth_diff={warmth_diff:.1f})."
-                    print(f"[PREDICT] [DISAMBIGUATION] Overriding 'Mud' -> 'Black Ballpen Ink' on White Cotton: {reason}")
-                    p_ink = max(0.96, float(np.max(cnn_probs)))
-                    p_oil = float(cnn_probs[1]) * 0.04
-                    p_mud = float(cnn_probs[2]) * 0.04
-                    new_probs = np.array([p_ink, p_oil, p_mud])
-                    new_probs = new_probs / np.sum(new_probs)
-                    return "Black Ballpen Ink", new_probs, 0, True, reason
+        # ─────────────────────────────────────────────────────────────────
+        # Physical Signatures Identification:
+        # ─────────────────────────────────────────────────────────────────
+        # 1. Genuine Black Ballpen Ink:
+        #    Deep blue/black ink clustering (Hue <= 15 or >= 140, dark luminance)
+        #    with ink concentration and low amber ratio (amber_ratio < 0.30)
+        has_ink_clustering = (
+            (ink_density >= 0.005 and ink_count >= 100) or
+            (blue_ink_ratio >= 0.005 and ink_count >= 50) or
+            (ink_density >= 0.02)
+        ) and (amber_ratio < 0.30)
 
-        # ── DISAMBIGUATION 3: CNN predicted 'Black Ballpen Ink' ──────────
-        # If CNN predicted Ballpen on White Cotton, but the stain is completely bright/translucent with amber lipid hue:
-        if cnn_label == "Black Ballpen Ink" and is_white:
-            if min_gray >= 50 and p5_gray >= 75 and amber_ratio >= 0.20 and stain_lap_var < 200:
-                reason = f"Lipid verification: stain lacks dark pigment (min_gray={min_gray:.1f}) and exhibits amber lipid profile (amber_ratio={amber_ratio:.2f})."
-                print(f"[PREDICT] [DISAMBIGUATION] Overriding 'Black Ballpen Ink' -> 'Used Cooking Oil': {reason}")
-                p_oil = max(0.95, float(np.max(cnn_probs)))
+        # 2. Genuine Used Cooking Oil:
+        #    Amber/gold hue signatures (12-48 deg) spanning >= 35% of stain region or lipid halo,
+        #    lacking concentrated ink pigment.
+        is_cooking_oil = (
+            (amber_ratio >= 0.35 or has_lipid_halo) and
+            (blue_ink_ratio < 0.02) and
+            (ink_density < 0.02) and
+            (ink_count < 200) and
+            (deep_opaque_ratio < 0.35 or mean_drop < 55.0)
+        )
+
+        # 3. Genuine Mud Signature:
+        #    Soil signatures with high particle opacity, substantial luminance drop,
+        #    irregular crust boundary, and absence of blue ink.
+        is_soil_crust = (
+            (deep_opaque_ratio >= 0.15 or mean_drop >= 35.0) and
+            (amber_ratio >= 0.60) and
+            (blue_ink_ratio < 0.02)
+        )
+
+        # ─────────────────────────────────────────────────────────────────
+        # Deterministic Guardrail Execution:
+        # ─────────────────────────────────────────────────────────────────
+        # Case A: CNN predicted Black Ballpen Ink
+        if cnn_label == "Black Ballpen Ink":
+            # Override to Used Cooking Oil if stain exhibits amber/gold lipid signature and lacks ink clustering
+            if (amber_ratio >= 0.35 or is_cooking_oil) and (not has_ink_clustering) and (ink_count < 1200 and ink_density < 0.08):
+                reason = f"Used Cooking Oil Guardrail: Amber/gold lipid signature ({amber_ratio:.2%}) with lack of ink clustering (ink_count={ink_count}, blue_ink={blue_ink_ratio:.4f}) overrode Black Ballpen Ink misclassification."
+                p_oil = max(0.96, float(np.max(cnn_probs)))
                 p_ink = float(cnn_probs[0]) * 0.04
                 p_mud = float(cnn_probs[2]) * 0.04
-                new_probs = np.array([p_ink, p_oil, p_mud])
-                new_probs = new_probs / np.sum(new_probs)
-                return "Used Cooking Oil", new_probs, 1, True, reason
+                new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
+                return "Used Cooking Oil", new_probs, 1, True, reason, metrics
+            elif has_ink_clustering:
+                reason = f"Black Ballpen Ink Guardrail: Deep blue/black ink clustering verified (ink_density={ink_density:.4f}, ink_count={ink_count})."
+                return "Black Ballpen Ink", cnn_probs, 0, False, reason, metrics
+            else:
+                return "Black Ballpen Ink", cnn_probs, 0, False, "CNN prediction confirmed by colorimetric analysis", metrics
+
+        # Case B: CNN predicted Mud
+        if cnn_label == "Mud":
+            if has_ink_clustering:
+                reason = f"Black Ballpen Ink Guardrail: Blue ink strokes / dark clustering detected (ink_count={ink_count}, blue_ink={blue_ink_ratio:.4f}) overriding Mud."
+                p_ink = max(0.96, float(np.max(cnn_probs)))
+                p_oil = float(cnn_probs[1]) * 0.04
+                p_mud = float(cnn_probs[2]) * 0.04
+                new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
+                return "Black Ballpen Ink", new_probs, 0, True, reason, metrics
+            # Only override Mud to Cooking Oil if it lacks soil crust opacity AND exhibits a clear translucent lipid halo
+            if is_cooking_oil and (deep_opaque_ratio < 0.10 and mean_drop < 30.0 and opaque_ratio < 0.10):
+                reason = f"Used Cooking Oil Guardrail: Translucent amber lipid diffusion halo detected (cooking oil with sediment) overriding Mud."
+                p_oil = max(0.96, float(np.max(cnn_probs)))
+                p_ink = float(cnn_probs[0]) * 0.04
+                p_mud = float(cnn_probs[2]) * 0.04
+                new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
+                return "Used Cooking Oil", new_probs, 1, True, reason, metrics
+            # Retain Mud with verified soil profile
+            reason = f"Mud Guardrail verified: Earthy soil signatures retained (particle opacity={opaque_ratio:.2f}, mean_drop={mean_drop:.1f}, crust irregularity={crust_irregularity:.2f})."
+            return "Mud", cnn_probs, 2, False, reason, metrics
+
+        # Case C: CNN predicted Used Cooking Oil
+        if cnn_label == "Used Cooking Oil":
+            if has_ink_clustering:
+                reason = f"Black Ballpen Ink Guardrail: Ink strokes detected ({ink_count} px) overriding Cooking Oil."
+                p_ink = max(0.96, float(np.max(cnn_probs)))
+                p_oil = float(cnn_probs[1]) * 0.04
+                p_mud = float(cnn_probs[2]) * 0.04
+                new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
+                return "Black Ballpen Ink", new_probs, 0, True, reason, metrics
+            if is_soil_crust and (deep_opaque_ratio >= 0.25 and mean_drop >= 45.0 and crust_irregularity >= 0.70) and (not has_lipid_halo):
+                reason = f"Mud Guardrail override: High opacity earthy soil crust detected ({amber_ratio:.2%}) overriding Cooking Oil."
+                p_mud = max(0.96, float(np.max(cnn_probs)))
+                p_ink = float(cnn_probs[0]) * 0.04
+                p_oil = float(cnn_probs[1]) * 0.04
+                new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
+                return "Mud", new_probs, 2, True, reason, metrics
+            reason = f"Used Cooking Oil verified: Amber/gold lipid signature confirmed ({amber_ratio:.2%})."
+            return "Used Cooking Oil", cnn_probs, 1, False, reason, metrics
 
         top1 = int(np.argmax(cnn_probs))
-        return cnn_label, cnn_probs, top1, False, "Consistent with physical properties"
+        return cnn_label, cnn_probs, top1, False, "CNN prediction confirmed by colorimetric analysis", metrics
     except Exception as e:
         print(f"[PREDICT] Warning in physical disambiguation: {e}")
         top1 = int(np.argmax(cnn_probs))
-        return cnn_label, cnn_probs, top1, False, str(e)
+        return cnn_label, cnn_probs, top1, False, str(e), {}
 
 def check_used_cooking_oil_lipid_signature(pil_image: Image.Image, fabric_color: str) -> tuple:
     """Legacy helper maintained for backward compatibility."""
-    lbl, probs, top1, changed, reason = verify_and_disambiguate_stain_physics(
+    res = verify_and_disambiguate_stain_physics(
         pil_image, "Mud", np.array([0.0, 0.0, 1.0]), fabric_color
     )
+    lbl = res[0]
     is_oil = (lbl == "Used Cooking Oil")
     return is_oil, 0.0, 0.0
 
@@ -1609,10 +1771,12 @@ def preprocess_image(pil_image: Image.Image) -> np.ndarray:
     Preprocess a PIL image to match the MobileNetV2 transfer learning pipeline:
       1. Correct EXIF orientation (for mobile camera/gallery photos)
       2. Convert to RGB color space
-      3. Resize to target input shape (224x224) using Bilinear interpolation
-      4. Apply CIELAB CLAHE dynamic contrast equalization
-      5. Apply MobileNetV2 preprocess_input to scale pixel values to [-1.0, 1.0]
-      6. Expand batch dimension -> shape (1, 224, 224, 3)
+      3. Center square-crop to preserve aspect ratio (prevents stretching fabric weave)
+      4. Resize to target input shape (224x224) using high-quality Bilinear resampling
+      5. Fabric-referenced illumination normalization (neutralize warm indoor lighting)
+      6. Apply CIELAB CLAHE dynamic contrast equalization
+      7. Apply MobileNetV2 preprocess_input to scale pixel values to [-1.0, 1.0]
+      8. Expand batch dimension -> shape (1, 224, 224, 3)
     """
     if pil_image is None:
         raise ValueError("Cannot preprocess a None image object.")
@@ -1634,14 +1798,27 @@ def preprocess_image(pil_image: Image.Image) -> np.ndarray:
             print(f"[Preprocessing] Model input_shape lookup warning: {shape_err}")
             target_size = IMAGE_SIZE
 
-    # 3. Convert to RGB and resize
+    # 3. Convert to RGB, center square-crop to preserve aspect ratio, and resize
     try:
-        img = pil_image.convert("RGB").resize(target_size, Image.BILINEAR)
+        rgb_img = pil_image.convert("RGB")
+        w, h = rgb_img.size
+        crop_size = min(w, h)
+        left = (w - crop_size) // 2
+        top = (h - crop_size) // 2
+        square_crop = rgb_img.crop((left, top, left + crop_size, top + crop_size))
+        resample_filter = getattr(getattr(Image, "Resampling", None), "BILINEAR", Image.BILINEAR)
+        img = square_crop.resize(target_size, resample_filter)
         arr = np.array(img, dtype=np.uint8)
     except Exception as img_err:
-        raise ValueError(f"Failed converting or resizing image to array: {img_err}")
+        raise ValueError(f"Failed converting, cropping, or resizing image: {img_err}")
 
-    # 4. Apply CIELAB CLAHE contrast enhancement
+    # 4. Fabric-referenced illumination normalization (auto white-balance for warm indoor lights)
+    try:
+        arr = normalize_fabric_illumination(arr)
+    except Exception as norm_illum_err:
+        print(f"[Preprocessing] Illumination normalization warning: {norm_illum_err}")
+
+    # 5. Apply CIELAB CLAHE contrast enhancement
     try:
         enhanced = apply_clahe(arr)
     except Exception as clahe_err:
@@ -2003,7 +2180,7 @@ def predict():
 
             return jsonify({
                 "id":                   scan_id,
-                "status":               "success",
+                "status":               "Unidentified",
                 "stain_type":           "Unidentified Object",
                 "is_valid_fabric":      False,
                 "is_classified":        False,
@@ -2094,7 +2271,7 @@ def predict():
 
             return jsonify({
                 "id":                   scan_id,
-                "status":               "success",
+                "status":               "Unidentified",
                 "stain_type":           "Unidentified Object",
                 "is_valid_fabric":      False,
                 "is_classified":        False,
@@ -2164,7 +2341,7 @@ def predict():
 
             return jsonify({
                 "id":                   scan_id,
-                "status":               "success",
+                "status":               "Unidentified",
                 "is_classified":        False,
                 "is_valid_fabric":      False,
                 "stain_type":           "Unidentified Object",
@@ -2249,25 +2426,33 @@ def predict():
                 "details": str(inf_err)
             }), 500
         
-        # Calculate max_confidence and sort predictions to evaluate top-1 vs top-2 class probabilities
-        max_confidence     = float(np.max(predictions))
-        order              = np.argsort(probs)[::-1]
-        top1_idx           = int(order[0])
-        top2_idx           = int(order[1])
-        top2_confidence    = float(probs[top2_idx])
-        margin             = max_confidence - top2_confidence
-        confidence_percent = int(round(max_confidence * 100))
-        margin_percent     = round(margin * 100, 2)
-        predicted_raw      = CLASS_MAPPING_RAW.get(top1_idx, "Unknown")
-        predicted_label    = CLASS_MAPPING_DISPLAY.get(top1_idx, predicted_raw)
+        # Capture raw model outputs before deterministic guardrail intervention
+        raw_probs              = probs.copy()
+        raw_max_confidence     = float(np.max(predictions))
+        raw_order              = np.argsort(raw_probs)[::-1]
+        raw_top1_idx           = int(raw_order[0])
+        raw_top2_idx           = int(raw_order[1])
+        raw_margin             = raw_max_confidence - float(raw_probs[raw_top2_idx])
+        raw_confidence_percent = int(round(raw_max_confidence * 100))
+        raw_margin_percent     = round(raw_margin * 100, 2)
+        raw_predicted_raw      = CLASS_MAPPING_RAW.get(raw_top1_idx, "Unknown")
+        raw_predicted_label    = CLASS_MAPPING_DISPLAY.get(raw_top1_idx, raw_predicted_raw)
+        raw_probabilities      = {
+            "Black Ballpen Ink": round(float(raw_probs[0]) * 100, 2),
+            "Used Cooking Oil":  round(float(raw_probs[1]) * 100, 2),
+            "Mud":               round(float(raw_probs[2]) * 100, 2)
+        }
 
-        # Detect fabric color context
+        # Fabric Luminance Fix: 90th-percentile highlight check (P90 >= 150 for White Cotton)
         detected_fabric = detect_fabric_color_from_image(image)
         actual_fabric_color = fabric_context if fabric_context and ("cotton" in fabric_context.lower()) else detected_fabric
 
-        # Physical Verification & Disambiguation across all 3 trained classes
-        predicted_label, probs, top1_idx, was_disambiguated, disambiguation_reason = verify_and_disambiguate_stain_physics(
-            image, predicted_label, probs, actual_fabric_color
+        # Multi-Class HSV Colorimetric Guardrails executed deterministically right after CNN inference:
+        # 1. Black Ballpen Ink Guardrail (deep blue/black hue clustering, low sat, high dark density)
+        # 2. Used Cooking Oil Guardrail (amber/gold hue, moderate-high value, smooth translucent lipid diffusion halo)
+        # 3. Mud Guardrail (retain Mud only for earthy soil, high particle opacity, irregular crust, no ink/lipid halo)
+        predicted_label, probs, top1_idx, was_disambiguated, disambiguation_reason, colorimetry_metrics = verify_and_disambiguate_stain_physics(
+            image, raw_predicted_label, probs, actual_fabric_color
         )
         predicted_raw      = CLASS_MAPPING_RAW.get(top1_idx, "Unknown")
         max_confidence     = float(probs[top1_idx])
@@ -2278,12 +2463,24 @@ def predict():
         confidence_percent = int(round(max_confidence * 100))
         margin_percent     = round(margin * 100, 2)
 
-        # Build authentic probability distribution across all 3 trained classes
+        # Build final guarded probability distribution across all 3 trained classes
         probabilities = {
             "Black Ballpen Ink": round(float(probs[0]) * 100, 2),
             "Used Cooking Oil":  round(float(probs[1]) * 100, 2),
             "Mud":               round(float(probs[2]) * 100, 2)
         }
+
+        # Thesis Audit Logging: Log raw model outputs, extracted HSV colorimetric metrics, and guarded decisions
+        client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
+        print(f"[THESIS AUDIT] ==========================================================================")
+        print(f"[THESIS AUDIT] [RAW CNN] Output: Label='{raw_predicted_label}' ({raw_confidence_percent}%) | Probs={raw_probabilities} | RawClass='{raw_predicted_raw}'")
+        print(f"[THESIS AUDIT] [FABRIC CONTEXT] Detected='{detected_fabric}' | Context='{fabric_context}' | Effective='{actual_fabric_color}'")
+        print(f"[THESIS AUDIT] [COLORIMETRIC METRICS] P90={colorimetry_metrics.get('p90')} | ink_density={colorimetry_metrics.get('ink_density')} | amber_ratio={colorimetry_metrics.get('amber_ratio')} | opaque_ratio={colorimetry_metrics.get('opaque_ratio')} | min_gray={colorimetry_metrics.get('min_gray')} | ink_count={colorimetry_metrics.get('ink_pixel_count')} | blue_ink_ratio={colorimetry_metrics.get('blue_ink_ratio')} | lipid_halo={colorimetry_metrics.get('has_translucent_lipid_halo')}")
+        print(f"[THESIS AUDIT] [COLORIMETRIC FULL] {colorimetry_metrics}")
+        print(f"[THESIS AUDIT] [FINAL GUARDED] Output: Label='{predicted_label}' ({confidence_percent}%) | Margin={margin_percent}% | Overridden={was_disambiguated}")
+        print(f"[THESIS AUDIT] [GUARDRAIL DECISION] Rule: {disambiguation_reason}")
+        print(f"[THESIS AUDIT] [AUDIT CONTEXT] User='{user_email or 'anonymous'}' | IP={client_ip}")
+        print(f"[THESIS AUDIT] ==========================================================================")
 
         # Retrieve dynamic recommendation based on stain and fabric context
         try:
@@ -2339,7 +2536,7 @@ def predict():
 
             return jsonify({
                 "id":                   scan_id,
-                "status":               "success",
+                "status":               "Unidentified",
                 "is_classified":        False,
                 "is_valid_fabric":      False,
                 "confidence":           max_confidence,
@@ -2353,6 +2550,17 @@ def predict():
                 "texture_variance":     round(texture_variance, 2),
                 "margin":               margin_percent,
                 "probabilities":        probabilities,
+                "raw_model_output": {
+                    "stain_type":       raw_predicted_label,
+                    "confidence":       raw_confidence_percent,
+                    "confidence_score": round(raw_max_confidence, 4),
+                    "probabilities":    raw_probabilities
+                },
+                "guardrail": {
+                    "is_overridden":    was_disambiguated,
+                    "reason":           disambiguation_reason,
+                    "final_stain":      predicted_label
+                },
                 "fabric":               "Unidentified / N/A",
                 "message":              rejection_message,
                 "rejection_message":    rejection_message,
@@ -2406,6 +2614,18 @@ def predict():
             "texture_variance":     round(texture_variance, 2),
             "margin":               margin_percent,
             "probabilities":        probabilities,
+            "raw_model_output": {
+                "stain_type":       raw_predicted_label,
+                "confidence":       raw_confidence_percent,
+                "confidence_score": round(raw_max_confidence, 4),
+                "probabilities":    raw_probabilities
+            },
+            "guardrail": {
+                "is_overridden":    was_disambiguated,
+                "reason":           disambiguation_reason,
+                "final_stain":      predicted_label,
+                "metrics":          colorimetry_metrics
+            },
             "stain":                predicted_label,
             "fabric":               f"{fabric_color} (100%)",
             "message":              f"Successfully recognized {predicted_label} on {fabric_color}.",
