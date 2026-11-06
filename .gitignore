@@ -35,3 +35,5 @@ DataSet/
 
 scans.json
 *.tmp
+
+*.bak

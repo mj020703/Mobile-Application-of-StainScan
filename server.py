@@ -2002,7 +2002,7 @@ def health_check():
         load_model()
     return jsonify({
         "status": "healthy" if model is not None else "degraded",
-        "version": "v3.3-fabric-chromaticity-and-memory-lock-20261106",
+        "version": "v3.4-domain-adapted-mobilenetv2-20261106",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
