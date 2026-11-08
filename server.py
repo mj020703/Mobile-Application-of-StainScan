@@ -748,7 +748,7 @@ MONGO_URI = (
     os.environ.get("MONGO_URI") or 
     os.environ.get("MONGODB_URI") or 
     os.environ.get("DATABASE_URL") or 
-    ""
+    "mongodb+srv://stainscan_admin:arnold123@cluster0.eanl2yy.mongodb.net/?retryWrites=true&w=majority"
 ).strip()
 MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "stainscan_db").strip()
 
@@ -1944,66 +1944,57 @@ else:
 
 CANDIDATE_ERRORS = {}
 
+MODEL_LOAD_LOCK = threading.Lock()
+
 def load_model(force_reload=False):
     global model, LOADED_MODEL_FILE, LAST_MODEL_ERROR, CANDIDATE_ERRORS
     if model is not None and not force_reload:
-        return
+        return model
 
-    if not HAS_TF:
-        print("Warning: TensorFlow not installed. Prediction API will run in demo/fallback mode.")
-        return
+    with MODEL_LOAD_LOCK:
+        if model is not None and not force_reload:
+            return model
 
-    candidate_paths = [
-        MODEL_PATH,
-        "stainscan_model_v3_balanced.keras",
-        "stain_model.keras",
-        "stainscan_model_v3_balanced.h5",
-        "stain_model.h5",
-        "stainscan_model.h5"
-    ]
+        if not HAS_TF:
+            print("Warning: TensorFlow not installed. Prediction API will run in demo/fallback mode.")
+            return None
 
-    loaded_any = False
-    for p in candidate_paths:
-        if not os.path.exists(p):
-            CANDIDATE_ERRORS[p] = "File does not exist"
-            continue
-        print(f"Attempting model load from '{p}'...")
-        try:
-            loaded = keras.models.load_model(p, compile=False, custom_objects=CUSTOM_MODEL_OBJECTS)
-            dummy = np.zeros((1,) + IMAGE_SIZE + (3,), dtype=np.float32)
-            loaded.predict(dummy, verbose=0)
-            model = loaded
-            LOADED_MODEL_FILE = p
-            LAST_MODEL_ERROR = None
-            CANDIDATE_ERRORS[p] = "SUCCESS"
-            loaded_any = True
-            print(f"Model loaded successfully from '{p}'. Input shape: {model.input_shape}")
-            break
-        except Exception as e:
-            print(f"Error loading model from '{p}': {e}")
-            err_msg = f"{type(e).__name__}: {str(e)}"
-            CANDIDATE_ERRORS[p] = err_msg
-            LAST_MODEL_ERROR = f"Failed '{p}': {err_msg}"
+        candidate_paths = [
+            MODEL_PATH,
+            "stainscan_model_v3_balanced.keras",
+            "stain_model.keras",
+            "stainscan_model_v3_balanced.h5",
+            "stain_model.h5",
+            "stainscan_model.h5"
+        ]
 
-    if not loaded_any:
-        print(f"Warning: No valid model could be loaded. Running in demo/fallback mode.")
-        model = None
-        LOADED_MODEL_FILE = None
+        loaded_any = False
+        for p in candidate_paths:
+            if not os.path.exists(p):
+                CANDIDATE_ERRORS[p] = "File does not exist"
+                continue
+            print(f"Attempting model load from '{p}'...")
+            try:
+                loaded = keras.models.load_model(p, compile=False, custom_objects=CUSTOM_MODEL_OBJECTS)
+                model = loaded
+                LOADED_MODEL_FILE = p
+                LAST_MODEL_ERROR = None
+                CANDIDATE_ERRORS[p] = "SUCCESS"
+                loaded_any = True
+                print(f"Model loaded successfully from '{p}'. Input shape: {model.input_shape}")
+                break
+            except Exception as e:
+                print(f"Error loading model from '{p}': {e}")
+                err_msg = f"{type(e).__name__}: {str(e)}"
+                CANDIDATE_ERRORS[p] = err_msg
+                LAST_MODEL_ERROR = f"Failed '{p}': {err_msg}"
 
-# Asynchronous background model warm-up:
-# Allows Gunicorn, Flask, and MongoDB to bind to port and respond to /health, /api/login,
-# and /api/register immediately (<1s) without blocking Render cold starts or risking worker OOM timeouts.
-def _warmup_model_async():
-    import time
-    time.sleep(1.5)
-    try:
-        print("[INIT] Starting background asynchronous model warm-up...")
-        load_model()
-        print("[OK] Background model warm-up completed successfully.")
-    except Exception as e:
-        print(f"[WARN] Background model warm-up notice: {e}")
+        if not loaded_any:
+            print(f"Warning: No valid model could be loaded. Running in demo/fallback mode.")
+            model = None
+            LOADED_MODEL_FILE = None
 
-threading.Thread(target=_warmup_model_async, daemon=True).start()
+        return model
 
 # CORS headers handled dynamically by Flask-CORS middleware
 
@@ -2012,7 +2003,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.7-roi-crop-fabric-melange-20261108",
+        "version": "v3.7.1-instant-boot-resilient-auth-20261108",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
