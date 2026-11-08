@@ -1,0 +1,28 @@
+name: Keep Render backend awake
+
+# Render's free tier suspends the service after 15 minutes without traffic, and a cold
+# start can take 1-2 minutes. That makes the mobile app look "stuck" on the sign-in screen.
+# This job pings the backend every 5 minutes so it never goes to sleep.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping /health (retry until the service answers)
+        run: |
+          URL="https://stainscan-backend-gmbw.onrender.com/health"
+          for i in 1 2 3 4; do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 "$URL" || echo 000)
+            echo "attempt $i -> HTTP $CODE"
+            if [ "$CODE" = "200" ]; then exit 0; fi
+            sleep 10
+          done
+          echo "Backend did not answer with 200" && exit 1
