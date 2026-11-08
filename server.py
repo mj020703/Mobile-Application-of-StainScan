@@ -331,18 +331,21 @@ def detect_fabric_color_from_image(pil_image: Image.Image) -> str:
     try:
         img_rgb = pil_image.convert("RGB")
         w, h = img_rgb.size
-        if max(w, h) > 600:
-            scale = 600.0 / max(w, h)
-            img_rgb = img_rgb.resize((int(w * scale), int(h * scale)), Image.BILINEAR)
+        # Center-square crop to focus on garment region framed by user viewfinder (ignoring table/background edges)
+        min_dim = min(w, h)
+        left = (w - min_dim) // 2
+        top = (h - min_dim) // 2
+        crop = img_rgb.crop((left, top, left + min_dim, top + min_dim))
+        crop = crop.resize((300, 300), Image.BILINEAR)
 
-        arr = np.array(img_rgb)
-        h_arr, w_arr = arr.shape[:2]
-        cw, ch = max(5, int(w_arr * 0.15)), max(5, int(h_arr * 0.15))
+        arr = np.array(crop)
+        # Sample outer perimeter corners of the center crop around the stain
+        cw = 45  # 15% of 300
         corners = [
-            arr[0:ch, 0:cw],
-            arr[0:ch, w_arr-cw:w_arr],
-            arr[h_arr-ch:h_arr, 0:cw],
-            arr[h_arr-ch:h_arr, w_arr-cw:w_arr]
+            arr[0:cw, 0:cw],
+            arr[0:cw, 300-cw:300],
+            arr[300-cw:300, 0:cw],
+            arr[300-cw:300, 300-cw:300]
         ]
         corner_pixels = np.concatenate([c.reshape(-1, 3) for c in corners], axis=0).astype(float)
         r = corner_pixels[:, 0]
@@ -359,10 +362,10 @@ def detect_fabric_color_from_image(pil_image: Image.Image) -> str:
         p10 = float(np.percentile(corner_gray, 10))
         spread = p90 - p10
 
-        is_heather_melange = (spread >= 50.0 and p10 < 130.0)
-        is_neutral_grey    = (warmth <= 6.0 and mean_sat <= 16.0)
+        is_heather_grey = (spread >= 48.0 and p10 <= 170.0)
+        is_neutral_grey = (p90 < 170.0 and warmth <= 6.0 and mean_sat <= 16.0)
 
-        if is_heather_melange or is_neutral_grey:
+        if is_heather_grey or is_neutral_grey:
             return "Grey Cotton"
         else:
             return "White Cotton"
@@ -2009,7 +2012,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.6-fabric-substrate-melange-fix-20261106",
+        "version": "v3.7-roi-crop-fabric-melange-20261108",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
