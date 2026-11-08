@@ -12,6 +12,10 @@ import json
 import os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 os.environ["PYTHONIOENCODING"] = "utf-8"
+os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+os.environ["TF_NUM_INTEROP_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 from datetime import datetime
 import traceback
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -108,15 +112,13 @@ CLASS_MAPPING_DISPLAY = {
     2: "Mud"
 }
 
-# Try importing TensorFlow/Keras
-try:
-    import tensorflow as tf
-    from tensorflow import keras
-    from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
-    HAS_TF = True
-except ModuleNotFoundError:
-    print("TensorFlow not found. Prediction API will run in demo/fallback mode.")
-    HAS_TF = False
+# TensorFlow & Keras are lazy-loaded on-demand during /predict to guarantee instant boot (<1s)
+# and keep idle server memory under 45MB on Render's 512MB RAM free tier.
+HAS_TF = True
+tf = None
+keras = None
+preprocess_input = None
+CUSTOM_MODEL_OBJECTS = {}
 
 
 
@@ -1849,98 +1851,115 @@ def preprocess_image(pil_image: Image.Image) -> np.ndarray:
         print(f"[Preprocessing] CLAHE failed ({clahe_err}), proceeding with raw array.")
         enhanced = arr
 
-    # 5. MobileNetV2 normalization [-1.0, 1.0]
-    try:
-        if HAS_TF:
-            arr_norm = preprocess_input(enhanced.astype(np.float32))
-        else:
-            arr_norm = (enhanced.astype(np.float32) / 127.5) - 1.0
-    except Exception as norm_err:
-        print(f"[Preprocessing] Normalization warning ({norm_err}), using direct scaling.")
-        arr_norm = (enhanced.astype(np.float32) / 127.5) - 1.0
-
+    # 5. MobileNetV2 normalization [-1.0, 1.0] via fast vector scaling
+    arr_norm = (enhanced.astype(np.float32) / 127.5) - 1.0
     return np.expand_dims(arr_norm, axis=0)   # (1, 224, 224, 3)
 
 
-if HAS_TF:
-    class SafeGlorotUniform(keras.initializers.GlorotUniform):
-        def __init__(self, seed=None, **kwargs):
-            super().__init__(seed=seed)
-
-    CUSTOM_MODEL_OBJECTS = {
-        "GlorotUniform": SafeGlorotUniform,
-        "GlorotNormal": keras.initializers.GlorotNormal
-    }
+def ensure_tf_loaded():
+    global tf, keras, preprocess_input, HAS_TF, CUSTOM_MODEL_OBJECTS
+    if tf is not None and keras is not None:
+        return True
     try:
-        keras.saving.get_custom_objects()["GlorotUniform"] = SafeGlorotUniform
-        keras.saving.get_custom_objects()["GlorotNormal"] = keras.initializers.GlorotNormal
-    except Exception:
-        pass
+        import tensorflow as _tf
+        from tensorflow import keras as _keras
+        from tensorflow.keras.applications.mobilenet_v2 import preprocess_input as _preprocess
 
-    try:
-        def _patch_init(cls):
-            orig_init = cls.__init__
-            def patched_init(self, *args, **kwargs):
-                kwargs.pop("input_axes", None)
-                kwargs.pop("output_axes", None)
-                orig_init(self, *args, **kwargs)
-            cls.__init__ = patched_init
-
-        _patch_init(keras.initializers.GlorotUniform)
-        _patch_init(keras.initializers.GlorotNormal)
         try:
-            import keras.src.initializers.random_initializers as kri
-            _patch_init(kri.GlorotUniform)
-            _patch_init(kri.GlorotNormal)
+            _tf.config.threading.set_inter_op_parallelism_threads(1)
+            _tf.config.threading.set_intra_op_parallelism_threads(1)
         except Exception:
             pass
 
-        def _patch_bn(cls):
-            orig_init = cls.__init__
-            def patched_bn_init(self, *args, **kwargs):
-                kwargs.pop("renorm", None)
-                kwargs.pop("renorm_clipping", None)
-                kwargs.pop("renorm_momentum", None)
-                orig_init(self, *args, **kwargs)
-            cls.__init__ = patched_bn_init
+        class SafeGlorotUniform(_keras.initializers.GlorotUniform):
+            def __init__(self, seed=None, **kwargs):
+                super().__init__(seed=seed)
 
-        _patch_bn(keras.layers.BatchNormalization)
+        CUSTOM_MODEL_OBJECTS = {
+            "GlorotUniform": SafeGlorotUniform,
+            "GlorotNormal": _keras.initializers.GlorotNormal
+        }
         try:
-            import keras.src.layers.normalization.batch_normalization as kbn
-            _patch_bn(kbn.BatchNormalization)
+            _keras.saving.get_custom_objects()["GlorotUniform"] = SafeGlorotUniform
+            _keras.saving.get_custom_objects()["GlorotNormal"] = _keras.initializers.GlorotNormal
         except Exception:
             pass
 
-        def _patch_input(cls):
-            orig_init = cls.__init__
-            def patched_input_init(self, *args, **kwargs):
-                kwargs.pop("optional", None)
-                orig_init(self, *args, **kwargs)
-            cls.__init__ = patched_input_init
-
-        _patch_input(keras.layers.InputLayer)
         try:
-            import keras.src.layers.core.input_layer as kil
-            _patch_input(kil.InputLayer)
-        except Exception:
-            pass
-        def _patch_dense(cls):
-            orig_init = cls.__init__
-            def patched_dense_init(self, *args, **kwargs):
-                kwargs.pop("quantization_config", None)
-                orig_init(self, *args, **kwargs)
-            cls.__init__ = patched_dense_init
+            def _patch_init(cls):
+                orig_init = cls.__init__
+                def patched_init(self, *args, **kwargs):
+                    kwargs.pop("input_axes", None)
+                    kwargs.pop("output_axes", None)
+                    orig_init(self, *args, **kwargs)
+                cls.__init__ = patched_init
 
-        _patch_dense(keras.layers.Dense)
-        try:
-            import keras.src.layers.core.dense as kd
-            _patch_dense(kd.Dense)
-        except Exception:
-            pass
-    except Exception as e:
-        print(f"Warning setting compatibility patches: {e}")
-else:
-    CUSTOM_MODEL_OBJECTS = {}
+            _patch_init(_keras.initializers.GlorotUniform)
+            _patch_init(_keras.initializers.GlorotNormal)
+            try:
+                import keras.src.initializers.random_initializers as kri
+                _patch_init(kri.GlorotUniform)
+                _patch_init(kri.GlorotNormal)
+            except Exception:
+                pass
+
+            def _patch_bn(cls):
+                orig_init = cls.__init__
+                def patched_bn_init(self, *args, **kwargs):
+                    kwargs.pop("renorm", None)
+                    kwargs.pop("renorm_clipping", None)
+                    kwargs.pop("renorm_momentum", None)
+                    orig_init(self, *args, **kwargs)
+                cls.__init__ = patched_bn_init
+
+            _patch_bn(_keras.layers.BatchNormalization)
+            try:
+                import keras.src.layers.normalization.batch_normalization as kbn
+                _patch_bn(kbn.BatchNormalization)
+            except Exception:
+                pass
+
+            def _patch_input(cls):
+                orig_init = cls.__init__
+                def patched_input_init(self, *args, **kwargs):
+                    kwargs.pop("optional", None)
+                    orig_init(self, *args, **kwargs)
+                cls.__init__ = patched_input_init
+
+            _patch_input(_keras.layers.InputLayer)
+            try:
+                import keras.src.layers.core.input_layer as kil
+                _patch_input(kil.InputLayer)
+            except Exception:
+                pass
+
+            def _patch_dense(cls):
+                orig_init = cls.__init__
+                def patched_dense_init(self, *args, **kwargs):
+                    kwargs.pop("quantization_config", None)
+                    orig_init(self, *args, **kwargs)
+                cls.__init__ = patched_dense_init
+
+            _patch_dense(_keras.layers.Dense)
+            try:
+                import keras.src.layers.core.dense as kd
+                _patch_dense(kd.Dense)
+            except Exception:
+                pass
+        except Exception as patch_err:
+            print(f"Warning setting compatibility patches: {patch_err}")
+
+        tf = _tf
+        keras = _keras
+        preprocess_input = _preprocess
+        HAS_TF = True
+        print("[TF] TensorFlow & Keras lazy-loaded on-demand successfully.")
+        return True
+    except Exception as tf_err:
+        print(f"[TF] Lazy loading TensorFlow notice ({tf_err}). Server running in fallback mode.")
+        HAS_TF = False
+        return False
+
 
 CANDIDATE_ERRORS = {}
 
@@ -1955,8 +1974,8 @@ def load_model(force_reload=False):
         if model is not None and not force_reload:
             return model
 
-        if not HAS_TF:
-            print("Warning: TensorFlow not installed. Prediction API will run in demo/fallback mode.")
+        if not ensure_tf_loaded():
+            print("Warning: TensorFlow not available. Running in fallback mode.")
             return None
 
         candidate_paths = [
@@ -2003,7 +2022,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.7.1-instant-boot-resilient-auth-20261108",
+        "version": "v3.7.2-lazy-tf-instant-boot-20261108",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
