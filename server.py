@@ -364,8 +364,16 @@ def detect_fabric_color_from_image(pil_image: Image.Image) -> str:
         p10 = float(np.percentile(corner_gray, 10))
         spread = p90 - p10
 
-        is_heather_grey = (spread >= 48.0 and p10 <= 170.0)
-        is_neutral_grey = (p90 < 170.0 and warmth <= 6.0 and mean_sat <= 16.0)
+        # Substrate discrimination:
+        # 1. If unsoiled fabric is bright (p90 >= 188.0), it is unambiguously White Cotton.
+        if p90 >= 188.0:
+            return "White Cotton"
+
+        # 2. If below 188.0, check for genuine Grey Cotton signatures:
+        #    - Heather melange yarn spread with dark fibers (spread >= 45.0 and p10 <= 125.0)
+        #    - Neutral achromatic daylight balance (warmth <= 6.0 and sat <= 16.0)
+        is_heather_grey = (p90 < 188.0 and spread >= 45.0 and p10 <= 125.0)
+        is_neutral_grey = (p90 < 188.0 and warmth <= 6.0 and mean_sat <= 16.0)
 
         if is_heather_grey or is_neutral_grey:
             return "Grey Cotton"
@@ -2022,7 +2030,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.7.2-lazy-tf-instant-boot-20261108",
+        "version": "v3.8-p90-substrate-white-grey-fix-20261109",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
