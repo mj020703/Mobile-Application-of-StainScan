@@ -1,5 +1,6 @@
 [
   {
+    "_id": "6ad11f4103422f8ed41704bf",
     "name": "John Michael Dohinog",
     "email": "admin@stainscan.com",
     "password": "admin123",
@@ -7,39 +8,27 @@
     "avatar": "System Root"
   },
   {
+    "_id": "6ad12a170357524207452dde",
     "name": "John Michael Dohinog",
     "email": "johnmichaeldohinog6@gmail.com",
-    "password": "user123",
+    "password": "arnold123",
     "role": "user",
     "avatar": "John Michael Dohinog"
   },
   {
-    "name": "Dohinog",
-    "email": "johnmichaeldohinog1@gmail.com",
-    "password": "user123",
+    "_id": "6ae15114ddb08e09befc5549",
+    "name": "Kenjey Mugi",
+    "email": "kenjaymugi@gmail.com",
+    "password": "Kenjey123123",
     "role": "user",
-    "avatar": "Dohinog"
+    "avatar": "Kenjey Mugi"
   },
   {
-    "name": "Test User",
-    "email": "testuser@stainscan.com",
-    "password": "password123",
+    "_id": "6ae15156ddb08e09befc554d",
+    "name": "Michael Manan",
+    "email": "michaelmanan123@gmail.com",
+    "password": "michael123",
     "role": "user",
-    "avatar": "Test User"
-  },
-  {
-    "name": "Test User",
-    "email": "testuser@gmail.com",
-    "password": "user123",
-    "role": "user",
-    "avatar": "Test User"
-  },
-  {
-    "name": "Mobile Tester",
-    "email": "mobile_test@stainscan.com",
-    "password": "testerpassword123",
-    "role": "user",
-    "avatar": "Mobile Tester",
-    "_id": "6ad68c11ead2f180d40176a2"
+    "avatar": "Michael Manan"
   }
 ]

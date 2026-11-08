@@ -37,6 +37,8 @@ COPY stain_model.h5 .
 COPY stainscan_model.pth .
 COPY face_detection_yunet.onnx .
 COPY haarcascade_frontalface_default.xml .
+COPY users.json .
+COPY scans.json .
 
 # Expose port (default 5000)
 EXPOSE 5000

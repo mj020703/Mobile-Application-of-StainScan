@@ -830,9 +830,9 @@ def create_mongo_client(uri):
         ca_cert = None
 
     client_options = {
-        "serverSelectionTimeoutMS": 6000,
-        "connectTimeoutMS": 10000,
-        "socketTimeoutMS": 20000,
+        "serverSelectionTimeoutMS": 3500,
+        "connectTimeoutMS": 5000,
+        "socketTimeoutMS": 10000,
         "maxIdleTimeMS": 45000,          # Close idle sockets before Atlas drops them
         "retryWrites": True,             # Retry writes on transient network glitches
         "retryReads": True,              # Retry reads on transient network drops
@@ -1987,28 +1987,37 @@ def load_model(force_reload=False):
         model = None
         LOADED_MODEL_FILE = None
 
-# Pre-load model at module import so workers are warm
-try:
-    load_model()
-except Exception as e:
-    print(f"Startup model pre-load exception: {e}")
+# Asynchronous background model warm-up:
+# Allows Gunicorn, Flask, and MongoDB to bind to port and respond to /health, /api/login,
+# and /api/register immediately (<1s) without blocking Render cold starts or risking worker OOM timeouts.
+def _warmup_model_async():
+    import time
+    time.sleep(1.5)
+    try:
+        print("[INIT] Starting background asynchronous model warm-up...")
+        load_model()
+        print("[OK] Background model warm-up completed successfully.")
+    except Exception as e:
+        print(f"[WARN] Background model warm-up notice: {e}")
+
+threading.Thread(target=_warmup_model_async, daemon=True).start()
 
 # CORS headers handled dynamically by Flask-CORS middleware
 
 @app.route("/health", methods=["GET"])
 def health_check():
     global model, LOADED_MODEL_FILE
-    if model is None:
-        load_model()
     return jsonify({
-        "status": "healthy" if model is not None else "degraded",
+        "status": "healthy" if model is not None else "ready",
         "version": "v3.6-fabric-substrate-melange-fix-20261106",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
         "input_shape": list(model.input_shape) if (model is not None and hasattr(model, "input_shape")) else [None, 224, 224, 3],
         "backend": "TensorFlow/Keras" if HAS_TF else "demo",
-        "load_error": LAST_MODEL_ERROR
+        "load_error": LAST_MODEL_ERROR,
+        "db_status": "connected" if db is not None else "fallback_local",
+        "is_demo_mode": is_demo_mode
     })
 
 @app.route("/api/model-info", methods=["GET", "OPTIONS"])

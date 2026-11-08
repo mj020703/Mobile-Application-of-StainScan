@@ -904,7 +904,19 @@ document.addEventListener("DOMContentLoaded", () => {
             submitBtn.innerHTML = `<i class="fas fa-circle-notch fa-spin btn-spinner"></i> <span>${loadingText}</span>`;
         }
 
+        // Inform user if cloud server is performing cold start spin-up (Render Free Tier)
+        let wakeTimer = null;
+        if (submitBtn) {
+            wakeTimer = setTimeout(() => {
+                const wakeText = (typeof I18N !== "undefined" && I18N.currentLang === "hil")
+                    ? "Naga-bugtaw ang cloud server (~50s)..."
+                    : "Waking up cloud server (~50s)...";
+                submitBtn.innerHTML = `<i class="fas fa-satellite-dish fa-spin btn-spinner"></i> <span>${wakeText}</span>`;
+            }, 5000);
+        }
+
         const restoreBtn = () => {
+            if (wakeTimer) clearTimeout(wakeTimer);
             if (submitBtn && originalHtml) {
                 submitBtn.disabled = false;
                 submitBtn.classList.remove("loading");
@@ -912,15 +924,21 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         };
 
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s safety timeout
+
         fetch(DataStore.getApiUrl("/api/login"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, password })
+            body: JSON.stringify({ email, password }),
+            signal: controller.signal
         })
         .then(res => {
+            clearTimeout(timeoutId);
+            if (wakeTimer) clearTimeout(wakeTimer);
             const contentType = res.headers.get("content-type");
             if (!contentType || !contentType.includes("application/json")) {
-                throw new Error("Unable to connect to the backend service. Please check server connection.");
+                throw new Error("Unable to connect to backend. Server may be spinning up; please retry.");
             }
             if (!res.ok) {
                 return res.json().then(err => { throw new Error(err.error || "Login failed"); });
@@ -940,8 +958,13 @@ document.addEventListener("DOMContentLoaded", () => {
             restoreBtn();
         })
         .catch(err => {
-            showToast(err.message || "Invalid email credentials or password.", "error");
+            clearTimeout(timeoutId);
             restoreBtn();
+            if (err.name === "AbortError") {
+                showToast("Cloud server is waking up from free sleep (~50s). Please tap Sign In again in 10-15 seconds.", "info");
+            } else {
+                showToast(err.message || "Invalid email credentials or password.", "error");
+            }
         });
     });
 
@@ -958,15 +981,45 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
+        const submitBtn = e.target.querySelector("button[type='submit']");
+        const originalHtml = submitBtn ? submitBtn.innerHTML : null;
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.classList.add("loading");
+            submitBtn.innerHTML = `<i class="fas fa-circle-notch fa-spin btn-spinner"></i> <span>Creating account...</span>`;
+        }
+
+        let wakeTimer = null;
+        if (submitBtn) {
+            wakeTimer = setTimeout(() => {
+                submitBtn.innerHTML = `<i class="fas fa-satellite-dish fa-spin btn-spinner"></i> <span>Waking up cloud server (~50s)...</span>`;
+            }, 5000);
+        }
+
+        const restoreBtn = () => {
+            if (wakeTimer) clearTimeout(wakeTimer);
+            if (submitBtn && originalHtml) {
+                submitBtn.disabled = false;
+                submitBtn.classList.remove("loading");
+                submitBtn.innerHTML = originalHtml;
+            }
+        };
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 45000);
+
         fetch(DataStore.getApiUrl("/api/register"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name, email, password })
+            body: JSON.stringify({ name, email, password }),
+            signal: controller.signal
         })
         .then(res => {
+            clearTimeout(timeoutId);
+            if (wakeTimer) clearTimeout(wakeTimer);
             const contentType = res.headers.get("content-type");
             if (!contentType || !contentType.includes("application/json")) {
-                throw new Error("Unable to connect to the cloud service. Please verify that your backend server has been successfully redeployed on Render.");
+                throw new Error("Unable to connect to cloud service. Server may be waking up; please retry.");
             }
             if (!res.ok) {
                 return res.json().then(err => { throw new Error(err.error || "Registration failed"); });
@@ -974,12 +1027,19 @@ document.addEventListener("DOMContentLoaded", () => {
             return res.json();
         })
         .then(newUser => {
+            restoreBtn();
             showToast("Account created successfully! Please Sign In.");
             document.getElementById("registerForm").reset();
             document.getElementById("btnGoLogin").click();
         })
         .catch(err => {
-            showToast(err.message || "Registration failed.", "error");
+            clearTimeout(timeoutId);
+            restoreBtn();
+            if (err.name === "AbortError") {
+                showToast("Cloud server is waking up from free sleep. Please tap Create Account again in 15 seconds.", "info");
+            } else {
+                showToast(err.message || "Registration failed.", "error");
+            }
         });
     });
 
