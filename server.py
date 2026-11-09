@@ -46,7 +46,7 @@ except Exception as cv_err:
 
 IMAGE_SIZE           = (224, 224)                 # Exact match with MobileNetV2 input shape
 MODEL_PATH           = "stainscan_model_v3_balanced.keras"  # Primary retrained model file
-CONFIDENCE_THRESHOLD = 0.85                       # Strict 85% confidence threshold for Out-of-Distribution guardrail
+CONFIDENCE_THRESHOLD = 0.70                       # 70% confidence threshold for Out-of-Distribution guardrail (accommodates mobile angles/lighting)
 LOADED_MODEL_FILE    = None
 LAST_MODEL_ERROR     = None
 
@@ -2030,7 +2030,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.9-cnn-dual-head-fabric-fix-20261109",
+        "version": "v3.10-face-skin-filter-and-ood-threshold-fix-20261109",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
@@ -2296,9 +2296,29 @@ def predict():
                     scale = 800.0 / max(h, w)
                     gray_small = cv2.resize(cv_gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
                 else:
+                    scale = 1.0
                     gray_small = cv_gray
-                faces = FACE_CASCADE.detectMultiScale(gray_small, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
-                if len(faces) > 0:
+                
+                # Strict parameters to prevent fabric weave/ink flecks from triggering false face detections
+                faces = FACE_CASCADE.detectMultiScale(gray_small, scaleFactor=1.15, minNeighbors=7, minSize=(100, 100))
+                
+                # Cross-validate candidate face bounding boxes against physiological skin presence
+                valid_faces = []
+                for (fx, fy, fw, fh) in faces:
+                    orig_x = int(fx / scale)
+                    orig_y = int(fy / scale)
+                    orig_w = int(fw / scale)
+                    orig_h = int(fh / scale)
+                    if skin_mask is not None and hasattr(skin_mask, "shape"):
+                        box_skin = skin_mask[orig_y : orig_y + orig_h, orig_x : orig_x + orig_w]
+                        box_skin_ratio = float(np.mean(box_skin)) if box_skin.size > 0 else 0.0
+                        # Real human face close-up has at least 15% skin coverage; fabric has near 0%
+                        if box_skin_ratio >= 0.15:
+                            valid_faces.append((fx, fy, fw, fh))
+                    else:
+                        valid_faces.append((fx, fy, fw, fh))
+
+                if len(valid_faces) > 0:
                     face_detected = True
                     face_score = 1.0
             except Exception as face_err:
