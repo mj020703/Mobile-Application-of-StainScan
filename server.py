@@ -585,14 +585,14 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         # ─────────────────────────────────────────────────────────────────
         # Case A: CNN predicted Black Ballpen Ink
         if cnn_label == "Black Ballpen Ink":
-            if is_cooking_oil or ((amber_ratio >= oil_amber_thresh or is_grey) and not has_ink_clustering):
+            if (is_cooking_oil or (amber_ratio >= 0.35 and has_lipid_halo)) and not has_ink_clustering:
                 reason = f"Used Cooking Oil Guardrail: Translucent lipid amber signature ({amber_ratio:.2%}) with absence of genuine ink strokes (ink_count={ink_count}, blue_ink={blue_ink_ratio:.4f}) overrode Black Ballpen Ink misclassification on {fabric_color}."
                 p_oil = max(0.96, float(np.max(cnn_probs)))
                 p_ink = float(cnn_probs[0]) * 0.04
                 p_mud = float(cnn_probs[2]) * 0.04
                 new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
                 return "Used Cooking Oil", new_probs, 1, True, reason, metrics
-            elif has_ink_clustering:
+            elif has_ink_clustering or (blue_ink_ratio >= 0.003):
                 reason = f"Black Ballpen Ink Guardrail: Deep blue/black ink clustering verified (ink_density={ink_density:.4f}, ink_count={ink_count}, blue_ink={blue_ink_ratio:.4f})."
                 return "Black Ballpen Ink", cnn_probs, 0, False, reason, metrics
             else:
@@ -2030,7 +2030,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.8-p90-substrate-white-grey-fix-20261109",
+        "version": "v3.9-cnn-dual-head-fabric-fix-20261109",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
@@ -2469,8 +2469,15 @@ def predict():
         # Run real TensorFlow CNN inference (serialized with lock to prevent memory spikes on free tier)
         try:
             with INFERENCE_LOCK:
-                predictions = model.predict(input_arr, verbose=0)  # (1, 3) softmax probabilities
-                probs       = predictions[0]                        # (3,)
+                predictions = model.predict(input_arr, verbose=0)
+                # Multi-head CNN output: [stain_head, fabric_head] or single-head [stain_head]
+                if isinstance(predictions, (list, tuple)):
+                    stain_preds = predictions[0]
+                    fabric_preds = predictions[1] if len(predictions) > 1 else None
+                else:
+                    stain_preds = predictions
+                    fabric_preds = None
+                probs = stain_preds[0]  # (3,)
         except Exception as inf_err:
             print(f"[Predict] Model inference error: {inf_err}\n{traceback.format_exc()}")
             return jsonify({
@@ -2481,7 +2488,7 @@ def predict():
         
         # Capture raw model outputs before deterministic guardrail intervention
         raw_probs              = probs.copy()
-        raw_max_confidence     = float(np.max(predictions))
+        raw_max_confidence     = float(np.max(stain_preds))
         raw_order              = np.argsort(raw_probs)[::-1]
         raw_top1_idx           = int(raw_order[0])
         raw_top2_idx           = int(raw_order[1])
@@ -2496,8 +2503,17 @@ def predict():
             "Mud":               round(float(raw_probs[2]) * 100, 2)
         }
 
-        # Fabric Luminance & Substrate Detection:
-        detected_fabric = detect_fabric_color_from_image(image)
+        # Fabric Substrate Detection:
+        # 1. Use the CNN model's dedicated trained fabric head (White Cotton vs Grey Cotton)
+        if fabric_preds is not None:
+            cnn_fab_probs = fabric_preds[0]
+            cnn_fab_idx = int(np.argmax(cnn_fab_probs))
+            cnn_fab_conf = float(cnn_fab_probs[cnn_fab_idx])
+            detected_fabric = "Grey Cotton" if cnn_fab_idx == 1 else "White Cotton"
+            print(f"[PREDICT] CNN Fabric Head: {detected_fabric} ({cnn_fab_conf:.2%}) [White={cnn_fab_probs[0]:.4f}, Grey={cnn_fab_probs[1]:.4f}]")
+        else:
+            detected_fabric = detect_fabric_color_from_image(image)
+
         if fabric_context and ("grey" in fabric_context.lower() or "gray" in fabric_context.lower()):
             actual_fabric_color = "Grey Cotton"
         elif fabric_context and ("white" in fabric_context.lower()):
