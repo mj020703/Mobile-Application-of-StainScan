@@ -2030,7 +2030,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.10-face-skin-filter-and-ood-threshold-fix-20261109",
+        "version": "v3.11-unsoiled-substrate-fabric-fix-20261109",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
@@ -2524,15 +2524,13 @@ def predict():
         }
 
         # Fabric Substrate Detection:
-        # 1. Use the CNN model's dedicated trained fabric head (White Cotton vs Grey Cotton)
+        # Analyzes the unsoiled garment perimeter to avoid stain darkening bias of CNN global average pooling
+        detected_fabric = detect_fabric_color_from_image(image)
         if fabric_preds is not None:
             cnn_fab_probs = fabric_preds[0]
             cnn_fab_idx = int(np.argmax(cnn_fab_probs))
             cnn_fab_conf = float(cnn_fab_probs[cnn_fab_idx])
-            detected_fabric = "Grey Cotton" if cnn_fab_idx == 1 else "White Cotton"
-            print(f"[PREDICT] CNN Fabric Head: {detected_fabric} ({cnn_fab_conf:.2%}) [White={cnn_fab_probs[0]:.4f}, Grey={cnn_fab_probs[1]:.4f}]")
-        else:
-            detected_fabric = detect_fabric_color_from_image(image)
+            print(f"[PREDICT] Substrate Corner Analysis: '{detected_fabric}' | CNN Head: {'Grey Cotton' if cnn_fab_idx == 1 else 'White Cotton'} ({cnn_fab_conf:.2%})")
 
         if fabric_context and ("grey" in fabric_context.lower() or "gray" in fabric_context.lower()):
             actual_fabric_color = "Grey Cotton"
