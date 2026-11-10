@@ -371,22 +371,30 @@ def detect_fabric_color_from_image(pil_image: Image.Image, cnn_fab_idx: int = No
         spread = p90 - p10
         melange_ratio = lap_var / max(1.0, float(np.mean(perimeter_gray)))
 
-        # Rule 1: High chrominance or bright highlight unambiguously confirms White Cotton
-        if rgb_diff >= 14.0 or sat >= 25.0 or p90 >= 215.0 or p75 >= 195.0:
+        cnn_is_grey = (cnn_fab_idx == 1 and cnn_fab_conf >= 85.0)
+
+        # Rule 1: High chrominance on bright fabric confirms White Cotton (room lighting cast)
+        if (rgb_diff >= 14.0 or sat >= 25.0) and p90 >= 180.0:
+            return "White Cotton"
+
+        # Rule 1B: Solid bright highlight confirms White Cotton UNLESS CNN strongly predicts Grey Cotton with dark fibers present (swatch on white desk)
+        if (p90 >= 215.0 or p75 >= 195.0):
+            if cnn_is_grey and p10 <= 135.0:
+                return "Grey Cotton"
             return "White Cotton"
 
         # Rule 2: High Laplacian melange variance with dark fibers confirms Heather Grey Cotton
         if melange_ratio >= 1.2 and spread >= 45.0 and p10 <= 135.0:
             return "Grey Cotton"
 
-        # Rule 3: Uniform bright plain weave confirms White Cotton
-        if p50 >= 168.0 and p10 >= 140.0 and melange_ratio < 1.1:
+        # Rule 3: Uniform bright plain weave confirms White Cotton (only when not confident grey)
+        if not cnn_is_grey and p50 >= 168.0 and p10 >= 140.0 and melange_ratio < 1.1:
             return "White Cotton"
 
         # Rule 4: CNN fabric head fallback protected against stain darkening
         if cnn_fab_idx is not None and cnn_fab_conf >= 70.0:
             cnn_res = "Grey Cotton" if cnn_fab_idx == 1 else "White Cotton"
-            if cnn_res == "Grey Cotton" and p90 >= 188.0 and p50 >= 170.0 and melange_ratio < 1.2:
+            if cnn_res == "Grey Cotton" and p90 >= 210.0 and p50 >= 190.0 and melange_ratio < 1.1:
                 return "White Cotton"
             return cnn_res
 
@@ -2055,7 +2063,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.13-universal-robustness-20261110",
+        "version": "v3.14-grey-swatch-and-table-boundary-fix-20261110",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
