@@ -443,8 +443,9 @@ def analyze_stain_colorimetry(pil_image: Image.Image, fabric_color: str = "White
     blue_ink_count = int(np.sum(blue_ink_pixels & (stain_mask > 0)))
     blue_ink_ratio = blue_ink_count / max(1, num_stain_pixels)
 
-    # 2. Used Cooking Oil: amber/gold hue signatures (12 <= Hue <= 48, Sat >= 6, Val >= 45)
-    amber_gold_mask = (h_chan >= 12) & (h_chan <= 48) & (s_chan >= 6) & (v_chan >= 45)
+    # 2. Used Cooking Oil: amber/gold hue signatures (12 <= Hue <= 48, Sat >= 28, Val >= 50)
+    # Saturation threshold >= 28 strictly prevents neutral/warm white cotton fabric from being counted as amber oil
+    amber_gold_mask = (h_chan >= 12) & (h_chan <= 48) & (s_chan >= 28) & (v_chan >= 50)
     amber_pixels_count = int(np.sum(amber_gold_mask & (stain_mask > 0)))
     amber_ratio = amber_pixels_count / max(1, num_stain_pixels)
 
@@ -557,10 +558,10 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         has_ink_clustering = (
             (blue_ink_ratio >= 0.005 and ink_count >= 50) or
             (blue_ink_ratio >= 0.001 and ink_count >= 10) or
-            (ink_density >= 0.020 and min_gray <= 28) or
-            (ink_density >= 0.015 and min_gray <= 25 and p5_gray <= 45) or
-            (ink_density >= 0.030 and amber_ratio < 0.25)
-        ) and (amber_ratio < 0.30 or blue_ink_ratio >= 0.005)
+            (ink_density >= 0.003 and min_gray <= 45) or
+            (dark_density >= 0.02 and min_gray <= 50) or
+            (min_gray <= 35 and dark_pixel_count >= 300)
+        ) and (amber_ratio < 0.25)
 
         # 2. Genuine Used Cooking Oil:
         oil_amber_thresh = 0.15 if is_grey else 0.30
@@ -594,9 +595,17 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
                 return "Used Cooking Oil", new_probs, 1, True, reason, metrics
             elif has_ink_clustering or (blue_ink_ratio >= 0.003):
                 reason = f"Black Ballpen Ink Guardrail: Deep blue/black ink clustering verified (ink_density={ink_density:.4f}, ink_count={ink_count}, blue_ink={blue_ink_ratio:.4f})."
-                return "Black Ballpen Ink", cnn_probs, 0, False, reason, metrics
+                p_ink = max(0.96, float(np.max(cnn_probs)))
+                p_oil = float(cnn_probs[1]) * 0.04
+                p_mud = float(cnn_probs[2]) * 0.04
+                new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
+                return "Black Ballpen Ink", new_probs, 0, False, reason, metrics
             else:
-                return "Black Ballpen Ink", cnn_probs, 0, False, "CNN prediction confirmed by colorimetric analysis", metrics
+                p_ink = max(0.95, float(np.max(cnn_probs)))
+                p_oil = float(cnn_probs[1]) * 0.05
+                p_mud = float(cnn_probs[2]) * 0.05
+                new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
+                return "Black Ballpen Ink", new_probs, 0, False, "CNN prediction confirmed by colorimetric analysis", metrics
 
         # Case B: CNN predicted Mud
         if cnn_label == "Mud":
@@ -2030,7 +2039,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.11-unsoiled-substrate-fabric-fix-20261109",
+        "version": "v3.12-amber-saturation-and-ink-guardrail-fix-20261110",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
