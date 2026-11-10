@@ -18,6 +18,8 @@ __pycache__/
 DataSet/
 
 # Allow tracking weights and logo
+!stainscan_model_v4_dual.keras
+!stainscan_model_v4_dual.h5
 !stainscan_model_v3_balanced.h5
 !stain_model.h5
 !stainscan_model_v3_balanced.keras
@@ -32,7 +34,8 @@ DataSet/
 .env
 .env.local
 .env.*.local
-
+
+
 scans.json
 *.tmp
 
