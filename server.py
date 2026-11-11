@@ -631,14 +631,6 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
 
         # Case B: CNN predicted Mud
         if cnn_label == "Mud":
-            # Override to Black Ballpen Ink only if genuine dense ink strokes exist and CNN is not confident
-            if has_ink_clustering and float(np.max(cnn_probs)) < 0.85:
-                reason = f"Black Ballpen Ink Guardrail: Dense ink strokes detected (ink_count={ink_count}, density={ink_density:.4f}) overriding low-confidence Mud."
-                p_ink = max(0.96, float(np.max(cnn_probs)))
-                p_oil = float(cnn_probs[1]) * 0.04
-                p_mud = float(cnn_probs[2]) * 0.04
-                new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
-                return "Black Ballpen Ink", new_probs, 0, True, reason, metrics
             # On Grey Cotton, translucent liquid absorption with amber tone is cooking oil, not solid mud crust
             if is_grey and (is_cooking_oil or (amber_ratio >= 0.50 and deep_opaque_ratio < 0.40)) and not has_ink_clustering:
                 reason = f"Used Cooking Oil Guardrail: Translucent amber lipid diffusion detected on {fabric_color} (amber={amber_ratio:.2%}) overriding Mud."
@@ -2085,7 +2077,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.15-mud-soil-ink-guardrail-fix-20261111",
+        "version": "v3.16-mud-soil-guaranteed-retention-20261111",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
