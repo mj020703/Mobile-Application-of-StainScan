@@ -371,34 +371,34 @@ def detect_fabric_color_from_image(pil_image: Image.Image, cnn_fab_idx: int = No
         spread = p90 - p10
         melange_ratio = lap_var / max(1.0, float(np.mean(perimeter_gray)))
 
-        cnn_is_grey = (cnn_fab_idx == 1 and cnn_fab_conf >= 85.0)
+        cnn_is_grey = (cnn_fab_idx == 1 and cnn_fab_conf >= 80.0)
+        cnn_is_white = (cnn_fab_idx == 0 and cnn_fab_conf >= 80.0)
 
-        # Rule 1: High chrominance on bright fabric confirms White Cotton (room lighting cast)
-        if (rgb_diff >= 14.0 or sat >= 25.0) and p90 >= 180.0:
+        # Rule 1: Confirmed Heather Grey Cotton (CNN multi-scale confidence supported by melange texture or grey luminance)
+        if cnn_is_grey and (melange_ratio >= 1.2 or lap_var >= 200.0 or p50 <= 180.0):
+            return "Grey Cotton"
+
+        # Rule 2: Confirmed White Cotton (CNN confidence supported by uniform plain weave or high brightness)
+        if cnn_is_white and (melange_ratio < 1.2 or p90 >= 210.0):
             return "White Cotton"
 
-        # Rule 1B: Solid bright highlight confirms White Cotton UNLESS CNN strongly predicts Grey Cotton with dark fibers present (swatch on white desk)
-        if (p90 >= 215.0 or p75 >= 195.0):
-            if cnn_is_grey and p10 <= 135.0:
-                return "Grey Cotton"
+        # Rule 3: High chrominance on bright fabric confirms White Cotton (room lighting cast)
+        if rgb_diff >= 14.0 and p90 >= 180.0 and not cnn_is_grey:
             return "White Cotton"
 
-        # Rule 2: High Laplacian melange variance with dark fibers confirms Heather Grey Cotton
+        # Rule 4: Solid bright highlight with low texture variance confirms White Cotton
+        if p90 >= 215.0 and melange_ratio < 1.1:
+            return "White Cotton"
+
+        # Rule 5: High Laplacian melange variance with dark fibers confirms Heather Grey Cotton
         if melange_ratio >= 1.2 and spread >= 45.0 and p10 <= 135.0:
             return "Grey Cotton"
 
-        # Rule 3: Uniform bright plain weave confirms White Cotton (only when not confident grey)
-        if not cnn_is_grey and p50 >= 168.0 and p10 >= 140.0 and melange_ratio < 1.1:
-            return "White Cotton"
-
-        # Rule 4: CNN fabric head fallback protected against stain darkening
+        # Rule 6: CNN fabric head fallback protected against stain darkening
         if cnn_fab_idx is not None and cnn_fab_conf >= 70.0:
-            cnn_res = "Grey Cotton" if cnn_fab_idx == 1 else "White Cotton"
-            if cnn_res == "Grey Cotton" and p90 >= 210.0 and p50 >= 190.0 and melange_ratio < 1.1:
-                return "White Cotton"
-            return cnn_res
+            return "Grey Cotton" if cnn_fab_idx == 1 else "White Cotton"
 
-        # Rule 5: Fallback luminance threshold
+        # Rule 7: Fallback luminance threshold
         return "White Cotton" if p90 >= 180.0 else "Grey Cotton"
     except Exception as e:
         print(f"[Fabric Detection] Warning in substrate check: {e}")
@@ -2077,7 +2077,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.16-mud-soil-guaranteed-retention-20261111",
+        "version": "v3.17-perfect-fabric-and-mud-retention-20261111",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
