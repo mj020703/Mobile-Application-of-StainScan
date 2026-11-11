@@ -323,69 +323,109 @@ def normalize_fabric_illumination(img_rgb: np.ndarray, fabric_color: str = "Whit
 
 def detect_fabric_color_from_image(pil_image: Image.Image, cnn_fab_idx: int = None, cnn_fab_conf: float = 0.0) -> str:
     """
-    Robust Perimeter Dual-Evidence Fabric Substrate Detection (White Cotton vs Heather Grey Cotton):
-    Evaluates 10% outer border strips of the full camera frame, avoiding stain darkening bias
-    and aspect-ratio cropping artifacts:
-    1. White Chrominance / Highlight: Natural cotton saturation or highlight luminance
-    2. Heather Melange Texture: Laplacian variance / mean luminance ratio (melange >= 1.2)
-       with wide inter-percentile spread and dark fiber presence (p10 <= 135)
-    3. Plain White Weave: High median luminance (p50 >= 168) and clean solid weave (melange < 1.1)
-    4. Guarded Dual-Head CNN Fallback: Protects against global pooling dark-stain bias.
+    Table-Invariant Garment Substrate Fabric Detection (White Cotton vs Heather Grey Cotton):
+    Isolates the unstained fabric substrate in the garment viewfinder (center square crop),
+    preventing external table surfaces (e.g. dark wood desks, keyboards) or perimeter shadow artifacts
+    from contaminating fabric color and weave analysis.
+    Cross-examines CNN fabric head against physical substrate ground truth:
+    1. Unstained fabric luminance (P50 >= 180.0)
+    2. Heather melange texture (interwoven two-tone dark/light fibers causing Laplacian variance >= 450, Sobel grad >= 42.0)
+    3. Solid plain weave vs melange weave discrimination.
     """
     try:
-        arr = np.array(pil_image.convert("RGB"))
+        im = ImageOps.exif_transpose(pil_image).convert("RGB")
+        arr = np.array(im)
         h, w, _ = arr.shape
+        
+        if CV2_AVAILABLE and cv2 is not None:
+            gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+            lap_full = cv2.Laplacian(gray, cv2.CV_64F)
+            sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+            sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+            grad_full = np.sqrt(sobelx**2 + sobely**2)
+        else:
+            gray = (0.299 * arr[:, :, 0] + 0.587 * arr[:, :, 1] + 0.114 * arr[:, :, 2]).astype(np.uint8)
+            lap_full = np.zeros_like(gray, dtype=float)
+            grad_full = np.zeros_like(gray, dtype=float)
 
+        # 1. Garment viewfinder region (center square crop)
+        c_size = min(h, w)
+        cy, cx = h // 2, w // 2
+        hs = c_size // 2
+        crop_gray = gray[cy - hs : cy + hs, cx - hs : cx + hs]
+        crop_lap = lap_full[cy - hs : cy + hs, cx - hs : cx + hs]
+        crop_grad = grad_full[cy - hs : cy + hs, cx - hs : cx + hs]
+
+        # 2. Extract unstained fabric substrate:
+        # Dark stains and dark table borders are in lower percentiles.
+        # Unstained fabric pixels occupy the upper percentile band [p60, p98]
+        p60 = float(np.percentile(crop_gray, 60))
+        p98 = float(np.percentile(crop_gray, 98))
+        fab_mask = (crop_gray >= p60) & (crop_gray <= p98)
+        if np.sum(fab_mask) < 50:
+            fab_mask = crop_gray >= p60
+            
+        fab_gray = crop_gray[fab_mask]
+        fab_p50 = float(np.median(fab_gray)) if len(fab_gray) > 0 else 180.0
+
+        # Weave texture metrics on unstained fabric
+        fab_lap = crop_lap[fab_mask]
+        lap_var = float(np.var(fab_lap)) if len(fab_lap) > 0 else 0.0
+        fab_grad = crop_grad[fab_mask]
+        grad_mean = float(np.mean(fab_grad)) if len(fab_grad) > 0 else 0.0
+
+        is_heather_melange = (lap_var >= 450.0 and grad_mean >= 42.0) or (lap_var >= 700.0)
+
+        # 3. Perimeter metrics (for full-frame garment scans)
         ph = max(10, int(h * 0.10))
         pw = max(10, int(w * 0.10))
-        perimeter_rgb = np.concatenate([
-            arr[0:ph, :].reshape(-1, 3),
-            arr[h-ph:h, :].reshape(-1, 3),
-            arr[ph:h-ph, 0:pw].reshape(-1, 3),
-            arr[ph:h-ph, w-pw:w].reshape(-1, 3)
-        ], axis=0).astype(float)
+        perimeter_gray = np.concatenate([
+            gray[0:ph, :].flatten(),
+            gray[h-ph:h, :].flatten(),
+            gray[ph:h-ph, 0:pw].flatten(),
+            gray[ph:h-ph, w-pw:w].flatten()
+        ])
+        perim_p50 = float(np.percentile(perimeter_gray, 50))
+        is_perim_table = (perim_p50 < 110.0)
 
-        if CV2_AVAILABLE and cv2 is not None:
-            perimeter_gray = cv2.cvtColor(perimeter_rgb.reshape(-1, 1, 3).astype(np.uint8), cv2.COLOR_RGB2GRAY).flatten()
-            perimeter_hsv = cv2.cvtColor(perimeter_rgb.reshape(-1, 1, 3).astype(np.uint8), cv2.COLOR_RGB2HSV).reshape(-1, 3)
-            gray_all = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-            lap = cv2.Laplacian(gray_all, cv2.CV_64F)
-            perimeter_lap = np.concatenate([
-                lap[0:ph, :].flatten(),
-                lap[h-ph:h, :].flatten(),
-                lap[ph:h-ph, 0:pw].flatten(),
-                lap[ph:h-ph, w-pw:w].flatten()
-            ])
-            lap_var = float(np.var(perimeter_lap))
-            sat = float(np.mean(perimeter_hsv[:, 1]))
-        else:
-            perimeter_gray = 0.299 * perimeter_rgb[:, 0] + 0.587 * perimeter_rgb[:, 1] + 0.114 * perimeter_rgb[:, 2]
-            lap_var = float(np.var(perimeter_gray))
-            sat = float(np.std(perimeter_rgb, axis=1).mean())
+        perim_lap = np.concatenate([
+            lap_full[0:ph, :].flatten(),
+            lap_full[h-ph:h, :].flatten(),
+            lap_full[ph:h-ph, 0:pw].flatten(),
+            lap_full[ph:h-ph, w-pw:w].flatten()
+        ])
+        perim_lap_var = float(np.var(perim_lap))
+        perim_melange_ratio = perim_lap_var / max(1.0, float(np.mean(perimeter_gray)))
 
-        rgb_diff = float(np.mean(np.max(perimeter_rgb, axis=1) - np.min(perimeter_rgb, axis=1)))
-        p90 = float(np.percentile(perimeter_gray, 90))
-        p75 = float(np.percentile(perimeter_gray, 75))
-        p50 = float(np.percentile(perimeter_gray, 50))
-        p10 = float(np.percentile(perimeter_gray, 10))
-        spread = p90 - p10
-        melange_ratio = lap_var / max(1.0, float(np.mean(perimeter_gray)))
+        # Substrate Decision Engine:
+        is_bright_solid_white = (fab_p50 >= 180.0 and not is_heather_melange)
 
         # Rule 1: High-confidence CNN fabric prediction
-        # MobileNetV2 fabric head is highly robust (>= 95% on real world garments)
-        if cnn_fab_idx is not None and cnn_fab_conf >= 75.0:
-            return "Grey Cotton" if cnn_fab_idx == 1 else "White Cotton"
+        if cnn_fab_idx == 0 and cnn_fab_conf >= 70.0:
+            return "White Cotton"
 
-        # Rule 2: In-doubt / moderate confidence (e.g. extreme overexposure / underexposure)
-        # Heather Grey is characterized by high melange texture variance
-        if melange_ratio >= 1.5 and lap_var >= 200.0:
+        if cnn_fab_idx == 1:
+            # Cross-examine if CNN was tricked by CLAHE contrast stretching around dark ink or table
+            if is_bright_solid_white:
+                return "White Cotton"
+            if cnn_fab_conf >= 70.0:
+                return "Grey Cotton"
+
+        # Rule 2: Moderate confidence or border melange check
+        if not is_perim_table and perim_melange_ratio >= 1.5 and perim_lap_var >= 200.0:
             return "Grey Cotton"
+
+        if is_heather_melange:
+            return "Grey Cotton"
+
+        if is_bright_solid_white:
+            return "White Cotton"
 
         if cnn_fab_idx is not None and cnn_fab_conf >= 50.0:
             return "Grey Cotton" if cnn_fab_idx == 1 else "White Cotton"
 
-        # Rule 3: Fallback luminance threshold
-        return "White Cotton" if p90 >= 180.0 else "Grey Cotton"
+        # Fallback
+        return "White Cotton" if fab_p50 >= 180.0 else "Grey Cotton"
     except Exception as e:
         print(f"[Fabric Detection] Warning in substrate check: {e}")
         return "White Cotton"
@@ -2064,7 +2104,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.18-universal-real-world-100pct-20261111",
+        "version": "v3.19-table-invariant-fabric-detection-20261111",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
