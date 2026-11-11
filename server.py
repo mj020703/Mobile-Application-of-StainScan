@@ -426,8 +426,15 @@ def analyze_stain_colorimetry(pil_image: Image.Image, fabric_color: str = "White
     arr = normalize_fabric_illumination(arr, fabric_color)
     h_img, w_img = arr.shape[:2]
 
-    # Central garment region (10% to 90%)
-    crop_rgb = arr[int(h_img * 0.10):int(h_img * 0.90), int(w_img * 0.10):int(w_img * 0.90)]
+    # Central garment region matching CNN aspect ratio (square crop) to exclude external tables/surfaces
+    crop_size = min(w_img, h_img)
+    c_x, c_y = w_img // 2, h_img // 2
+    half_size = int(crop_size * 0.45)  # 90% of square, leaving 5% margin to prevent border contamination
+    y1 = max(0, c_y - half_size)
+    y2 = min(h_img, c_y + half_size)
+    x1 = max(0, c_x - half_size)
+    x2 = min(w_img, c_x + half_size)
+    crop_rgb = arr[y1:y2, x1:x2]
     crop_gray = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2GRAY)
     crop_hsv = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2HSV)
     crop_bgr = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2BGR)
@@ -575,17 +582,16 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         # Physical Signatures Identification:
         # ─────────────────────────────────────────────────────────────────
         # 1. Genuine Black Ballpen Ink:
-        #    Requires blue ink strokes OR genuine dense carbon/nigrosine black lines
+        #    Requires genuine dense carbon/nigrosine black lines or strong blue ink strokes
         has_ink_clustering = (
-            (blue_ink_ratio >= 0.005 and (ink_count >= 10 or dark_count >= 100)) or
-            (blue_ink_ratio >= 0.001 and ink_count >= 10) or
-            (ink_density >= 0.005 and min_gray <= 45) or
-            (dark_density >= 0.02 and min_gray <= 45 and blue_ink_ratio >= 0.005) or
-            (not is_grey and dark_density >= 0.02 and min_gray <= 50 and ink_count >= 20)
+            (ink_count >= 200 and ink_density >= 0.008) or
+            (blue_ink_ratio >= 0.02 and ink_count >= 100) or
+            (ink_density >= 0.010 and min_gray <= 40) or
+            (not is_grey and dark_density >= 0.03 and min_gray <= 35 and ink_count >= 200)
         ) and (amber_ratio < 0.25)
 
         # 2. Genuine Used Cooking Oil:
-        oil_amber_thresh = 0.15 if is_grey else 0.30
+        oil_amber_thresh = 0.15 if is_grey else 0.25
         is_cooking_oil = (
             (amber_ratio >= oil_amber_thresh) and
             (has_lipid_halo or mean_drop < 50.0) and
@@ -625,8 +631,9 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
 
         # Case B: CNN predicted Mud
         if cnn_label == "Mud":
-            if has_ink_clustering or (blue_ink_ratio >= 0.005 and dark_count >= 50):
-                reason = f"Black Ballpen Ink Guardrail: Blue ink strokes / dark clustering detected (ink_count={ink_count}, blue_ink={blue_ink_ratio:.4f}) overriding Mud."
+            # Override to Black Ballpen Ink only if genuine dense ink strokes exist and CNN is not confident
+            if has_ink_clustering and float(np.max(cnn_probs)) < 0.85:
+                reason = f"Black Ballpen Ink Guardrail: Dense ink strokes detected (ink_count={ink_count}, density={ink_density:.4f}) overriding low-confidence Mud."
                 p_ink = max(0.96, float(np.max(cnn_probs)))
                 p_oil = float(cnn_probs[1]) * 0.04
                 p_mud = float(cnn_probs[2]) * 0.04
@@ -1390,6 +1397,13 @@ def add_log(log_type, text):
     execute_db_operation(_op, fallback_fn=lambda: None)
     mock_db["logs"].insert(0, log_entry)
 
+def clear_logs():
+    def _op(d):
+        d["logs"].delete_many({})
+        return True
+    execute_db_operation(_op, fallback_fn=lambda: None)
+    mock_db["logs"] = []
+
 # --- DATABASE API ROUTES ---
 
 @app.route("/api/kb", methods=["GET", "POST", "OPTIONS"])
@@ -1769,12 +1783,20 @@ def api_metrics_reset():
     add_log("info", "Metrics counters reset to 0 by Administrator.")
     return jsonify({"success": True, "message": "Metrics reset to 0", "metrics": clean_zero_metrics}), 200
 
-@app.route("/api/logs", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/logs", methods=["GET", "POST", "DELETE", "OPTIONS"])
 def api_logs():
     if request.method == "OPTIONS":
         return jsonify({"status": "ok"})
+    if request.method == "DELETE":
+        clear_logs()
+        add_log("info", "System Audit logs cleared by Administrator.")
+        return jsonify({"success": True, "message": "Logs cleared successfully"}), 200
     if request.method == "POST":
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
+        if data.get("action") == "clear":
+            clear_logs()
+            add_log("info", "System Audit logs cleared by Administrator.")
+            return jsonify({"success": True, "message": "Logs cleared successfully"}), 200
         if not data or "type" not in data or "text" not in data:
             return jsonify({"error": "Missing log parameters"}), 400
         add_log(data["type"], data["text"])
@@ -2063,7 +2085,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.14-grey-swatch-and-table-boundary-fix-20261110",
+        "version": "v3.15-mud-soil-ink-guardrail-fix-20261111",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
