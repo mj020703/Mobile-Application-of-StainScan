@@ -2104,7 +2104,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.19-table-invariant-fabric-detection-20261111",
+        "version": "v3.20-shadow-robust-ood-saturation-filter-20261112",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
@@ -2542,10 +2542,19 @@ def predict():
             arr_raw = np.zeros((224, 224, 3), dtype=np.uint8)
 
         # Check HSV color saturation to reject vivid non-fabric objects (e.g., Persian rugs, neon objects)
+        # Exclude deep shadows / underexposed pixels (V < 60) where low luminance mathematically inflates saturation
         try:
             hsv = cv2.cvtColor(arr_raw, cv2.COLOR_RGB2HSV)
-            mean_sat = float(np.mean(hsv[:, :, 1]))
-            is_vivid_non_fabric = (mean_sat > 75.0)
+            s_chan = hsv[:, :, 1]
+            v_chan = hsv[:, :, 2]
+            bright_pixels = (v_chan >= 60)
+            if np.sum(bright_pixels) > 100:
+                mean_sat = float(np.mean(s_chan[bright_pixels]))
+                vivid_ratio = float(np.mean((s_chan > 110) & bright_pixels))
+                is_vivid_non_fabric = (mean_sat > 130.0) or (vivid_ratio > 0.50)
+            else:
+                mean_sat = 0.0
+                is_vivid_non_fabric = False
         except Exception as ood_sat_err:
             print(f"[Predict] Saturation check warning: {ood_sat_err}")
 
