@@ -374,7 +374,10 @@ def detect_fabric_color_from_image(pil_image: Image.Image, cnn_fab_idx: int = No
         fab_grad = crop_grad[fab_mask]
         grad_mean = float(np.mean(fab_grad)) if len(fab_grad) > 0 else 0.0
 
-        is_heather_melange = (lap_var >= 450.0 and grad_mean >= 42.0) or (lap_var >= 700.0)
+        # Heather melange occurs only in mid-tone fabrics (fab_p50 < 192.0),
+        # never in bright solid white fabrics (where mud crust edge roughness can elevate lap_var)
+        is_heather_melange = (fab_p50 < 192.0) and ((lap_var >= 450.0 and grad_mean >= 42.0) or (lap_var >= 700.0))
+        is_bright_solid_white = (fab_p50 >= 192.0)
 
         # 3. Perimeter metrics (for full-frame garment scans)
         ph = max(10, int(h * 0.10))
@@ -398,34 +401,29 @@ def detect_fabric_color_from_image(pil_image: Image.Image, cnn_fab_idx: int = No
         perim_melange_ratio = perim_lap_var / max(1.0, float(np.mean(perimeter_gray)))
 
         # Substrate Decision Engine:
-        is_bright_solid_white = (fab_p50 >= 180.0 and not is_heather_melange)
+        # Rule 0: Solid Bright White Fabric (fab_p50 >= 192.0 is physically White Cotton)
+        if is_bright_solid_white:
+            return "White Cotton"
 
         # Rule 1: High-confidence CNN fabric prediction
         if cnn_fab_idx == 0 and cnn_fab_conf >= 70.0:
             return "White Cotton"
 
-        if cnn_fab_idx == 1:
-            # Cross-examine if CNN was tricked by CLAHE contrast stretching around dark ink or table
-            if is_bright_solid_white:
-                return "White Cotton"
-            if cnn_fab_conf >= 70.0:
-                return "Grey Cotton"
+        if cnn_fab_idx == 1 and cnn_fab_conf >= 70.0 and fab_p50 <= 185.0:
+            return "Grey Cotton"
 
-        # Rule 2: Moderate confidence or border melange check
+        # Rule 2: Moderate confidence or border melange check for mid-tone fabric
         if not is_perim_table and perim_melange_ratio >= 1.5 and perim_lap_var >= 200.0:
             return "Grey Cotton"
 
         if is_heather_melange:
             return "Grey Cotton"
 
-        if is_bright_solid_white:
-            return "White Cotton"
-
         if cnn_fab_idx is not None and cnn_fab_conf >= 50.0:
-            return "Grey Cotton" if cnn_fab_idx == 1 else "White Cotton"
+            return "Grey Cotton" if (cnn_fab_idx == 1 and fab_p50 <= 185.0) else "White Cotton"
 
         # Fallback
-        return "White Cotton" if fab_p50 >= 180.0 else "Grey Cotton"
+        return "White Cotton" if fab_p50 >= 188.0 else "Grey Cotton"
     except Exception as e:
         print(f"[Fabric Detection] Warning in substrate check: {e}")
         return "White Cotton"
@@ -2104,7 +2102,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.20-shadow-robust-ood-saturation-filter-20261112",
+        "version": "v3.21-white-fabric-mud-table-robust-20261112",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
@@ -2275,19 +2273,20 @@ def predict():
                 raw_skin_mask = cv2.inRange(cv_ycrcb, lower_skin, upper_skin)
 
                 # Exclude near-white / neutral fabric highlights (Y > 215, S < 35)
-                # and require physiological skin saturation (S >= 70) to prevent
-                # warm-lit white/grey cotton and golden cooking oil from being falsely flagged as skin
+                # and require physiological skin saturation (S >= 70) and living skin luminance (Y >= 75, V >= 70)
+                # to prevent dark brown wooden tables, dried mud crusts, and warm-lit fabrics from falsely flagging as human skin
                 hsv_img = cv2.cvtColor(cv_bgr, cv2.COLOR_BGR2HSV)
                 y_chan = cv_ycrcb[:, :, 0]
                 s_chan = hsv_img[:, :, 1]
+                v_chan = hsv_img[:, :, 2]
                 is_fabric_highlight = (y_chan > 215) & (s_chan < 35)
-                skin_mask = (raw_skin_mask > 0) & (s_chan >= 70) & (~is_fabric_highlight)
+                skin_mask = (raw_skin_mask > 0) & (s_chan >= 70) & (y_chan >= 75) & (v_chan >= 70) & (~is_fabric_highlight)
                 skin_ratio = float(np.mean(skin_mask))
             except Exception as skin_err:
                 print(f"[Predict] Skin filter warning: {skin_err}")
                 skin_ratio = 0.0
 
-        if skin_ratio > 0.35:
+        if skin_ratio > 0.40:
             rejection_msg = "Scan rejected: Human skin detected. Please scan a cotton fabric stain."
             scan_id = "h_" + datetime.utcnow().strftime("%Y%m%d%H%M%S")
             try:
