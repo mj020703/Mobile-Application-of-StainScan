@@ -606,15 +606,17 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         # Physical Signatures Identification:
         # ─────────────────────────────────────────────────────────────────
         # 1. Genuine Black Ballpen Ink:
-        #    Requires genuine dense carbon/nigrosine black lines or strong blue ink strokes, with absence of lipid halo
+        #    Requires genuine blue/indigo dye tones OR deep neutral carbon black lines
+        #    with near-zero amber soil tones, and complete absence of lipid halo.
         has_ink_clustering = (
-            (ink_count >= 200 and ink_density >= 0.008) or
-            (blue_ink_ratio >= 0.02 and ink_count >= 100) or
-            (ink_density >= 0.010 and min_gray <= 40) or
-            (not is_grey and dark_density >= 0.03 and min_gray <= 35 and ink_count >= 200)
-        ) and (not has_lipid_halo) and (amber_ratio < 0.25)
+            (blue_ink_ratio >= 0.005) or
+            (ink_count >= 150 and ink_density >= 0.005 and min_gray <= 25 and amber_ratio < 0.03) or
+            (not is_grey and dark_density >= 0.03 and min_gray <= 35 and ink_count >= 100 and amber_ratio < 0.03) or
+            (ink_density >= 0.010 and min_gray <= 40 and amber_ratio < 0.03)
+        ) and (not has_lipid_halo)
 
         # 2. Genuine Used Cooking Oil:
+        #    Translucent lipid absorption without deep 3D opaque crusting
         oil_amber_thresh = 0.12 if is_grey else 0.20
         is_cooking_oil = (
             (has_lipid_halo or (amber_ratio >= oil_amber_thresh and mean_drop < 55.0)) and
@@ -622,15 +624,15 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
             (deep_opaque_ratio < 0.40)
         )
 
-        # 3. Genuine Mud Signature:
-        #    Soil signatures with high particle opacity, substantial luminance drop,
-        #    irregular crust boundary, and absence of blue ink.
+        # 3. Genuine Mud Crust:
+        #    High 3D particle opacity, substantial luminance drop, irregular crust boundary,
+        #    and absence of genuine ink strokes or lipid diffusion halo.
         is_soil_crust = (
-            (deep_opaque_ratio >= 0.45 or mean_drop >= 55.0) and
-            (amber_ratio >= 0.60 or opaque_ratio >= 0.60) and
+            (crust_irregularity >= 0.85) and
+            (deep_opaque_ratio >= 0.20 or mean_drop >= 48.0) and
+            (amber_ratio >= 0.04 or opaque_ratio >= 0.35) and
             (not has_ink_clustering) and
-            (not has_lipid_halo) and
-            (not is_grey)
+            (not has_lipid_halo)
         )
 
         # ─────────────────────────────────────────────────────────────────
@@ -638,20 +640,28 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         # ─────────────────────────────────────────────────────────────────
         # Case A: CNN predicted Black Ballpen Ink
         if cnn_label == "Black Ballpen Ink":
-            if (is_cooking_oil or (amber_ratio >= 0.35 and has_lipid_halo)) and not has_ink_clustering and blue_ink_ratio < 0.003:
-                reason = f"Used Cooking Oil Guardrail: Translucent lipid amber signature ({amber_ratio:.2%}) with absence of genuine ink strokes (ink_count={ink_count}, blue_ink={blue_ink_ratio:.4f}) overrode Black Ballpen Ink misclassification on {fabric_color}."
-                p_oil = max(0.96, float(np.max(cnn_probs)))
-                p_ink = float(cnn_probs[0]) * 0.04
-                p_mud = float(cnn_probs[2]) * 0.04
-                new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
-                return "Used Cooking Oil", new_probs, 1, True, reason, metrics
-            else:
-                reason = f"Black Ballpen Ink Guardrail: Deep blue/black ink clustering verified (ink_density={ink_density:.4f}, ink_count={ink_count}, blue_ink={blue_ink_ratio:.4f})."
-                p_ink = max(0.96, float(np.max(cnn_probs)))
-                p_oil = float(cnn_probs[1]) * 0.04
-                p_mud = float(cnn_probs[2]) * 0.04
-                new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
-                return "Black Ballpen Ink", new_probs, 0, False, reason, metrics
+            if not has_ink_clustering and blue_ink_ratio < 0.005:
+                if is_soil_crust or (mean_drop >= 48.0 and crust_irregularity >= 0.85 and amber_ratio >= 0.04):
+                    reason = f"Mud Guardrail override: High opacity earthy soil crust detected ({amber_ratio:.2%}) with absence of genuine ink strokes overriding Black Ballpen Ink on {fabric_color}."
+                    p_mud = max(0.96, float(np.max(cnn_probs)))
+                    p_ink = float(cnn_probs[0]) * 0.04
+                    p_oil = float(cnn_probs[1]) * 0.04
+                    new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
+                    return "Mud", new_probs, 2, True, reason, metrics
+                elif is_cooking_oil or (deep_opaque_ratio < 0.20 and mean_drop < 48.0):
+                    reason = f"Used Cooking Oil Guardrail: Translucent lipid amber signature ({amber_ratio:.2%}) with absence of genuine ink strokes overrode Black Ballpen Ink on {fabric_color}."
+                    p_oil = max(0.96, float(np.max(cnn_probs)))
+                    p_ink = float(cnn_probs[0]) * 0.04
+                    p_mud = float(cnn_probs[2]) * 0.04
+                    new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
+                    return "Used Cooking Oil", new_probs, 1, True, reason, metrics
+            # Genuine ink verified
+            reason = f"Black Ballpen Ink Guardrail: Deep blue/black ink clustering verified (ink_density={ink_density:.4f}, ink_count={ink_count}, blue_ink={blue_ink_ratio:.4f})."
+            p_ink = max(0.96, float(np.max(cnn_probs)))
+            p_oil = float(cnn_probs[1]) * 0.04
+            p_mud = float(cnn_probs[2]) * 0.04
+            new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
+            return "Black Ballpen Ink", new_probs, 0, False, reason, metrics
 
         # Case B: CNN predicted Mud
         if cnn_label == "Mud":
@@ -2102,7 +2112,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.21-white-fabric-mud-table-robust-20261112",
+        "version": "v3.22-grey-fabric-mud-oil-ink-disambig-20261112",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
