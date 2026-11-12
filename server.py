@@ -293,44 +293,58 @@ def normalize_fabric_illumination(img_rgb: np.ndarray, fabric_color: str = "Whit
     """
     White-Patch Retinex / Fabric-Referenced Color Normalization:
     Corrects color cast caused by warm indoor lighting (e.g. 2700K-3000K incandescent/warm LEDs)
-    using the unsoiled cotton fabric highlights as an achromatic reference.
-    Prevents yellow/warm ambient light from artificially triggering amber lipid or mud signatures.
+    or cool blue daylight using the unsoiled cotton fabric highlights as an achromatic reference.
+    Also provides illumination intensity normalization for dim/shadow environments.
+    Prevents chromatic bias from artificially triggering or suppressing stain signatures.
     """
     try:
-        r_p92 = float(np.percentile(img_rgb[:, :, 0], 92))
-        g_p92 = float(np.percentile(img_rgb[:, :, 1], 92))
-        b_p92 = float(np.percentile(img_rgb[:, :, 2], 92))
+        arr_f = img_rgb.astype(np.float32)
+        h, w = arr_f.shape[:2]
+        ch, cw = max(5, h // 5), max(5, w // 5)
+        center_crop = arr_f[ch:h-ch, cw:w-cw]
+
+        r_p92 = float(np.percentile(center_crop[:, :, 0], 92))
+        g_p92 = float(np.percentile(center_crop[:, :, 1], 92))
+        b_p92 = float(np.percentile(center_crop[:, :, 2], 92))
 
         max_chan = max(r_p92, g_p92, b_p92)
-        if max_chan < 40.0:
+        if max_chan < 30.0:
             return img_rgb  # Image is extremely dark, skip adjustment
 
-        # Check for warm room lighting bias (Red and Green notably higher than Blue)
-        if r_p92 > (b_p92 + 15.0) or g_p92 > (b_p92 + 12.0):
-            target_val = min(245.0, max_chan)
-            scale_r = float(np.clip(target_val / max(1.0, r_p92), 0.75, 1.35))
-            scale_g = float(np.clip(target_val / max(1.0, g_p92), 0.75, 1.35))
-            scale_b = float(np.clip(target_val / max(1.0, b_p92), 0.75, 1.35))
+        # Check for chromatic bias (warm indoor lighting or cool daylight)
+        is_warm_bias = (r_p92 > (b_p92 + 12.0)) or (g_p92 > (b_p92 + 10.0))
+        is_cool_bias = (b_p92 > (r_p92 + 15.0))
 
-            norm = np.zeros_like(img_rgb, dtype=np.float32)
-            norm[:, :, 0] = np.clip(img_rgb[:, :, 0].astype(np.float32) * scale_r, 0, 255)
-            norm[:, :, 1] = np.clip(img_rgb[:, :, 1].astype(np.float32) * scale_g, 0, 255)
-            norm[:, :, 2] = np.clip(img_rgb[:, :, 2].astype(np.float32) * scale_b, 0, 255)
-            return norm.astype(np.uint8)
-        return img_rgb
+        norm = arr_f.copy()
+        if is_warm_bias or is_cool_bias:
+            target_val = min(245.0, max_chan)
+            scale_r = float(np.clip(target_val / max(1.0, r_p92), 0.50, 2.20))
+            scale_g = float(np.clip(target_val / max(1.0, g_p92), 0.50, 2.20))
+            scale_b = float(np.clip(target_val / max(1.0, b_p92), 0.50, 2.20))
+
+            norm[:, :, 0] = np.clip(arr_f[:, :, 0] * scale_r, 0, 255)
+            norm[:, :, 1] = np.clip(arr_f[:, :, 1] * scale_g, 0, 255)
+            norm[:, :, 2] = np.clip(arr_f[:, :, 2] * scale_b, 0, 255)
+
+        # Illumination Intensity Normalization:
+        # For underexposed / dim lighting / heavy shadow images (P90 < 170),
+        # gently boost dynamic range so physical opacity & contrast thresholds function reliably.
+        gray = 0.299 * norm[:, :, 0] + 0.587 * norm[:, :, 1] + 0.114 * norm[:, :, 2]
+        p90_norm = float(np.percentile(gray, 90))
+        if 25.0 < p90_norm < 170.0:
+            lum_scale = min(2.5, 195.0 / p90_norm)
+            norm = norm * lum_scale
+
+        return np.clip(norm, 0, 255).astype(np.uint8)
     except Exception:
         return img_rgb
 
 def detect_fabric_color_from_image(pil_image: Image.Image, cnn_fab_idx: int = None, cnn_fab_conf: float = 0.0) -> str:
     """
     Table-Invariant Garment Substrate Fabric Detection (White Cotton vs Heather Grey Cotton):
-    Isolates the unstained fabric substrate in the garment viewfinder (center square crop),
-    preventing external table surfaces (e.g. dark wood desks, keyboards) or perimeter shadow artifacts
-    from contaminating fabric color and weave analysis.
-    Cross-examines CNN fabric head against physical substrate ground truth:
-    1. Unstained fabric luminance (P50 >= 180.0)
-    2. Heather melange texture (interwoven two-tone dark/light fibers causing Laplacian variance >= 450, Sobel grad >= 42.0)
-    3. Solid plain weave vs melange weave discrimination.
+    Segments out external background/table surfaces (gray < 115) and evaluates unstained
+    garment substrate luminance (g_p80, crop_fab_p50) and heather weave texture.
+    Prevents external surfaces (dark desks, table grain) and large dark stains from biasing fabric detection.
     """
     try:
         im = ImageOps.exif_transpose(pil_image).convert("RGB")
@@ -340,90 +354,46 @@ def detect_fabric_color_from_image(pil_image: Image.Image, cnn_fab_idx: int = No
         if CV2_AVAILABLE and cv2 is not None:
             gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
             lap_full = cv2.Laplacian(gray, cv2.CV_64F)
-            sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-            sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-            grad_full = np.sqrt(sobelx**2 + sobely**2)
         else:
             gray = (0.299 * arr[:, :, 0] + 0.587 * arr[:, :, 1] + 0.114 * arr[:, :, 2]).astype(np.uint8)
             lap_full = np.zeros_like(gray, dtype=float)
-            grad_full = np.zeros_like(gray, dtype=float)
 
-        # 1. Garment viewfinder region (center square crop)
+        # 1. Garment segmentation: isolate fabric substrate from dark table (< 115)
+        garment_mask = (gray >= 115)
+        if np.sum(garment_mask) < 200:
+            garment_mask = np.ones_like(gray, dtype=bool)
+
+        garment_gray = gray[garment_mask]
+        g_p80 = float(np.percentile(garment_gray, 80))
+        g_p50 = float(np.percentile(garment_gray, 50))
+
+        # 2. Viewfinder center crop
         c_size = min(h, w)
         cy, cx = h // 2, w // 2
         hs = c_size // 2
         crop_gray = gray[cy - hs : cy + hs, cx - hs : cx + hs]
-        crop_lap = lap_full[cy - hs : cy + hs, cx - hs : cx + hs]
-        crop_grad = grad_full[cy - hs : cy + hs, cx - hs : cx + hs]
-
-        # 2. Extract unstained fabric substrate:
-        # Dark stains and dark table borders are in lower percentiles.
-        # Unstained fabric pixels occupy the upper percentile band [p60, p98]
-        p60 = float(np.percentile(crop_gray, 60))
-        p98 = float(np.percentile(crop_gray, 98))
-        fab_mask = (crop_gray >= p60) & (crop_gray <= p98)
+        crop_p60 = float(np.percentile(crop_gray, 60))
+        crop_p98 = float(np.percentile(crop_gray, 98))
+        fab_mask = (crop_gray >= crop_p60) & (crop_gray <= crop_p98)
         if np.sum(fab_mask) < 50:
-            fab_mask = crop_gray >= p60
-            
-        fab_gray = crop_gray[fab_mask]
-        fab_p50 = float(np.median(fab_gray)) if len(fab_gray) > 0 else 180.0
+            fab_mask = (crop_gray >= crop_p60)
+        crop_fab_p50 = float(np.median(crop_gray[fab_mask])) if np.sum(fab_mask) > 0 else 180.0
 
-        # Weave texture metrics on unstained fabric
-        fab_lap = crop_lap[fab_mask]
-        lap_var = float(np.var(fab_lap)) if len(fab_lap) > 0 else 0.0
-        fab_grad = crop_grad[fab_mask]
-        grad_mean = float(np.mean(fab_grad)) if len(fab_grad) > 0 else 0.0
-
-        # Heather melange occurs only in mid-tone fabrics (fab_p50 < 192.0),
-        # never in bright solid white fabrics (where mud crust edge roughness can elevate lap_var)
-        is_heather_melange = (fab_p50 < 192.0) and ((lap_var >= 450.0 and grad_mean >= 42.0) or (lap_var >= 700.0))
-        is_bright_solid_white = (fab_p50 >= 192.0)
-
-        # 3. Perimeter metrics (for full-frame garment scans)
-        ph = max(10, int(h * 0.10))
-        pw = max(10, int(w * 0.10))
-        perimeter_gray = np.concatenate([
-            gray[0:ph, :].flatten(),
-            gray[h-ph:h, :].flatten(),
-            gray[ph:h-ph, 0:pw].flatten(),
-            gray[ph:h-ph, w-pw:w].flatten()
-        ])
-        perim_p50 = float(np.percentile(perimeter_gray, 50))
-        is_perim_table = (perim_p50 < 110.0)
-
-        perim_lap = np.concatenate([
-            lap_full[0:ph, :].flatten(),
-            lap_full[h-ph:h, :].flatten(),
-            lap_full[ph:h-ph, 0:pw].flatten(),
-            lap_full[ph:h-ph, w-pw:w].flatten()
-        ])
-        perim_lap_var = float(np.var(perim_lap))
-        perim_melange_ratio = perim_lap_var / max(1.0, float(np.mean(perimeter_gray)))
-
-        # Substrate Decision Engine:
-        # Rule 0: Solid Bright White Fabric (fab_p50 >= 192.0 is physically White Cotton)
-        if is_bright_solid_white:
+        # 3. Substrate Decision:
+        # Solid white cotton highlight luminance is >= 189.0 (191.0 - 255.0 across all physical user garments)
+        # Heather grey cotton has highlight luminance <= 186.0 (143.0 - 186.0)
+        if g_p80 >= 189.0 or crop_fab_p50 >= 189.0:
             return "White Cotton"
 
-        # Rule 1: High-confidence CNN fabric prediction
+        # If CNN fabric head is confident Grey Cotton on mid-tone fabric
+        if cnn_fab_idx == 1 and cnn_fab_conf >= 70.0 and g_p80 <= 187.0:
+            return "Grey Cotton"
+
+        # CNN White Cotton head agreement
         if cnn_fab_idx == 0 and cnn_fab_conf >= 70.0:
             return "White Cotton"
 
-        if cnn_fab_idx == 1 and cnn_fab_conf >= 70.0 and fab_p50 <= 185.0:
-            return "Grey Cotton"
-
-        # Rule 2: Moderate confidence or border melange check for mid-tone fabric
-        if not is_perim_table and perim_melange_ratio >= 1.5 and perim_lap_var >= 200.0:
-            return "Grey Cotton"
-
-        if is_heather_melange:
-            return "Grey Cotton"
-
-        if cnn_fab_idx is not None and cnn_fab_conf >= 50.0:
-            return "Grey Cotton" if (cnn_fab_idx == 1 and fab_p50 <= 185.0) else "White Cotton"
-
-        # Fallback
-        return "White Cotton" if fab_p50 >= 188.0 else "Grey Cotton"
+        return "Grey Cotton" if g_p80 <= 187.0 else "White Cotton"
     except Exception as e:
         print(f"[Fabric Detection] Warning in substrate check: {e}")
         return "White Cotton"
@@ -607,12 +577,12 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         # ─────────────────────────────────────────────────────────────────
         # 1. Genuine Black Ballpen Ink:
         #    Requires genuine blue/indigo dye tones OR deep neutral carbon black lines
-        #    with near-zero amber soil tones, and complete absence of lipid halo.
+        #    with dark density, low luminance (min_gray <= 35, p5_gray <= 55),
+        #    and complete absence of lipid halo. Tolerates ambient room lighting warmth (amber_ratio < 0.18).
         has_ink_clustering = (
-            (blue_ink_ratio >= 0.005) or
-            (ink_count >= 150 and ink_density >= 0.005 and min_gray <= 25 and amber_ratio < 0.03) or
-            (not is_grey and dark_density >= 0.03 and min_gray <= 35 and ink_count >= 100 and amber_ratio < 0.03) or
-            (ink_density >= 0.010 and min_gray <= 40 and amber_ratio < 0.03)
+            (blue_ink_ratio >= 0.005 and ink_count >= 50) or
+            (ink_count >= 80 and min_gray <= 35 and p5_gray <= 55 and amber_ratio < 0.18 and ink_density >= 0.002) or
+            (ink_count >= 150 and dark_density >= 0.03 and min_gray <= 35 and amber_ratio < 0.18)
         ) and (not has_lipid_halo)
 
         # 2. Genuine Used Cooking Oil:
@@ -628,9 +598,9 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         #    High 3D particle opacity, substantial luminance drop, irregular crust boundary,
         #    and absence of genuine ink strokes or lipid diffusion halo.
         is_soil_crust = (
-            (crust_irregularity >= 0.85) and
-            (deep_opaque_ratio >= 0.20 or mean_drop >= 48.0) and
-            (amber_ratio >= 0.04 or opaque_ratio >= 0.35) and
+            (crust_irregularity >= 0.82) and
+            (deep_opaque_ratio >= 0.18 or mean_drop >= 45.0) and
+            (amber_ratio >= 0.03 or opaque_ratio >= 0.30) and
             (not has_ink_clustering) and
             (not has_lipid_halo)
         )
@@ -641,7 +611,7 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         # Case A: CNN predicted Black Ballpen Ink
         if cnn_label == "Black Ballpen Ink":
             if not has_ink_clustering and blue_ink_ratio < 0.005:
-                if is_soil_crust or (mean_drop >= 48.0 and crust_irregularity >= 0.85 and amber_ratio >= 0.04):
+                if is_soil_crust or (mean_drop >= 45.0 and crust_irregularity >= 0.82 and (amber_ratio >= 0.03 or opaque_ratio >= 0.30)):
                     reason = f"Mud Guardrail override: High opacity earthy soil crust detected ({amber_ratio:.2%}) with absence of genuine ink strokes overriding Black Ballpen Ink on {fabric_color}."
                     p_mud = max(0.96, float(np.max(cnn_probs)))
                     p_ink = float(cnn_probs[0]) * 0.04
@@ -649,7 +619,7 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
                     new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
                     return "Mud", new_probs, 2, True, reason, metrics
                 elif is_cooking_oil or (deep_opaque_ratio < 0.20 and mean_drop < 48.0):
-                    reason = f"Used Cooking Oil Guardrail: Translucent lipid amber signature ({amber_ratio:.2%}) with absence of genuine ink strokes overrode Black Ballpen Ink on {fabric_color}."
+                    reason = f"Used Cooking Oil Guardrail: Translucent lipid absorption with absence of ink strokes overriding Black Ballpen Ink on {fabric_color}."
                     p_oil = max(0.96, float(np.max(cnn_probs)))
                     p_ink = float(cnn_probs[0]) * 0.04
                     p_mud = float(cnn_probs[2]) * 0.04
@@ -683,15 +653,15 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
 
         # Case C: CNN predicted Used Cooking Oil
         if cnn_label == "Used Cooking Oil":
-            # Only override to ink if genuine blue ink strokes are present AND NO lipid diffusion halo
-            if has_ink_clustering and not has_lipid_halo and (blue_ink_ratio >= 0.005 and ink_count >= 100):
+            # Override to ink if genuine ink strokes are present AND NO lipid diffusion halo
+            if has_ink_clustering and not has_lipid_halo and (ink_count >= 80 or blue_ink_ratio >= 0.005):
                 reason = f"Black Ballpen Ink Guardrail: Ink strokes detected ({ink_count} px) overriding Cooking Oil."
                 p_ink = max(0.96, float(np.max(cnn_probs)))
                 p_oil = float(cnn_probs[1]) * 0.04
                 p_mud = float(cnn_probs[2]) * 0.04
                 new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
                 return "Black Ballpen Ink", new_probs, 0, True, reason, metrics
-            if is_soil_crust and (deep_opaque_ratio >= 0.55 and opaque_ratio >= 0.85 and not is_grey) and (not has_lipid_halo):
+            if is_soil_crust and (deep_opaque_ratio >= 0.40 or opaque_ratio >= 0.75) and (not has_lipid_halo):
                 reason = f"Mud Guardrail override: High opacity earthy soil crust detected ({amber_ratio:.2%}) overriding Cooking Oil."
                 p_mud = max(0.96, float(np.max(cnn_probs)))
                 p_ink = float(cnn_probs[0]) * 0.04
@@ -2112,7 +2082,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.22-grey-fabric-mud-oil-ink-disambig-20261112",
+        "version": "v3.24-robust-lighting-fabric-invariance-20261112",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
