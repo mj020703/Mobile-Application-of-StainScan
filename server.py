@@ -367,15 +367,11 @@ def detect_fabric_color_from_image(pil_image: Image.Image, cnn_fab_idx: int = No
         g_p50 = float(np.percentile(garment_pixels, 50))
 
         # 2. High-confidence CNN Fabric Head (Convolutional Weave Invariance)
-        if cnn_fab_idx is not None and cnn_fab_conf >= 75.0:
-            if cnn_fab_idx == 1:  # Grey Cotton
-                # Grey cotton unless blown-out pure white throughout (g_p50 > 220)
-                if g_p50 <= 220.0:
-                    return "Grey Cotton"
-            elif cnn_fab_idx == 0:  # White Cotton
-                # White cotton unless deeply dark throughout (g_p80 < 140)
-                if g_p80 >= 140.0:
-                    return "White Cotton"
+        if cnn_fab_idx is not None and cnn_fab_conf >= 80.0:
+            if cnn_fab_idx == 1 and g_p50 <= 215.0:
+                return "Grey Cotton"
+            elif cnn_fab_idx == 0 and g_p80 >= 140.0:
+                return "White Cotton"
 
         # 3. Optical substrate analysis for moderate/uncertain CNN predictions
         corner_h, corner_w = max(10, h // 6), max(10, w // 6)
@@ -386,24 +382,24 @@ def detect_fabric_color_from_image(pil_image: Image.Image, cnn_fab_idx: int = No
             gray[-corner_h:, -corner_w:]
         ]
         valid_corners = [c for c in corners if np.mean(c) >= 100]
-        if valid_corners:
-            corner_median = float(np.median(np.concatenate([c.ravel() for c in valid_corners])))
-        else:
-            corner_median = g_p50
+        corner_pixels = np.concatenate([c.ravel() for c in valid_corners]) if valid_corners else garment_pixels
+        c_p50 = float(np.median(corner_pixels))
+        c_p20 = float(np.percentile(corner_pixels, 20))
 
-        # Solid white cotton highlights typically reach >= 195 even under normal room light
-        if corner_median >= 195.0 or g_p80 >= 210.0:
+        # Heather grey yarns have dark specks pulling c_p20 down (< 145) and c_p50 <= 165
+        # Solid white cotton has broadband high reflectance across all fibers (c_p50 >= 175, c_p20 >= 155)
+        if c_p50 >= 175.0 or c_p20 >= 155.0 or g_p80 >= 195.0:
             return "White Cotton"
-        elif corner_median <= 170.0 or g_p80 <= 180.0:
+        elif c_p50 <= 165.0 and c_p20 <= 145.0:
             return "Grey Cotton"
 
-        # Mid-tone ambiguity (170-195): defer to CNN head if available
-        if cnn_fab_idx == 1:
-            return "Grey Cotton"
-        elif cnn_fab_idx == 0:
+        # Mid-tone ambiguity: defer to CNN head if it has distinct preference (>= 55%)
+        if cnn_fab_idx == 0 and cnn_fab_conf >= 55.0:
             return "White Cotton"
+        elif cnn_fab_idx == 1 and cnn_fab_conf >= 55.0:
+            return "Grey Cotton"
 
-        return "White Cotton" if corner_median >= 185.0 else "Grey Cotton"
+        return "White Cotton" if c_p50 >= 170.0 else "Grey Cotton"
     except Exception as e:
         print(f"[Fabric Detection] Warning in substrate check: {e}")
         return "White Cotton"
@@ -2133,7 +2129,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.25-robust-lighting-and-stain-physics-20261113",
+        "version": "v3.26-robust-universal-physics-20261113",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
