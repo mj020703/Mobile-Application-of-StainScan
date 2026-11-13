@@ -140,6 +140,23 @@ class AdminDataStore {
             console.warn("Could not post log to cloud:", e);
         }
     }
+
+    static async clearLogs() {
+        try {
+            let res = await fetch(this.getApiUrl("/api/logs"), { method: "DELETE" });
+            if (!res.ok) {
+                res = await fetch(this.getApiUrl("/api/logs"), {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "clear", type: "info", text: "System Audit logs cleared by Administrator." })
+                });
+            }
+            return res.ok;
+        } catch (e) {
+            console.error("Failed to clear logs on cloud:", e);
+            return false;
+        }
+    }
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -192,8 +209,12 @@ document.addEventListener("DOMContentLoaded", () => {
             if (item.getAttribute("data-tab") === tabId) {
                 item.classList.add("active");
                 // Update header title based on navigation
-                const text = item.querySelector("span").textContent;
-                adminTabTitle.textContent = text;
+                if (tabId === "admin-overview") {
+                    adminTabTitle.textContent = "Overview & Analytics";
+                } else {
+                    const text = item.querySelector("span").textContent;
+                    adminTabTitle.textContent = text;
+                }
             } else {
                 item.classList.remove("active");
             }
@@ -394,18 +415,27 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const total = Object.values(counts).reduce((a, b) => a + b, 0);
 
+        const colorMap = {
+            "Used Cooking Oil": "#f59e0b",
+            "Black Ballpen Ink": "#8b5cf6",
+            "Mud": "#10b981"
+        };
+
         Object.keys(counts).forEach(key => {
             const val = counts[key];
             const pct = total > 0 ? Math.round((val / total) * 100) : 0;
+            const barColor = colorMap[key] || "#f97316";
 
             const barRow = document.createElement("div");
             barRow.className = "bar-row";
             barRow.innerHTML = `
-                <div class="bar-lbl" title="${key}">${key}</div>
-                <div class="bar-track-wrap">
-                    <div class="bar-fill-indicator" style="width: ${pct}%;"></div>
+                <div class="bar-header">
+                    <span class="bar-lbl" title="${key}">${key}</span>
+                    <strong class="bar-val">${pct}% (${val} ${val === 1 ? 'scan' : 'scans'})</strong>
                 </div>
-                <div class="bar-val">${val}</div>
+                <div class="bar-track-wrap">
+                    <div class="bar-fill-indicator" style="width: ${pct}%; background: ${barColor};"></div>
+                </div>
             `;
             chartContainer.appendChild(barRow);
         });
@@ -558,16 +588,12 @@ document.addEventListener("DOMContentLoaded", () => {
     // Clear logs
     document.getElementById("btnClearLogs").addEventListener("click", async () => {
         if (confirm("Are you sure you want to delete all audit logs?")) {
-            try {
-                await fetch(AdminDataStore.getApiUrl("/api/logs"), {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ type: "info", text: "System Audit logs cleared by Administrator." })
-                });
+            const ok = await AdminDataStore.clearLogs();
+            if (ok) {
                 await renderLogs();
-                showToast("Logs cleared successfully.");
-            } catch (e) {
-                console.error("Failed to clear logs:", e);
+                showToast("Audit logs cleared successfully.");
+            } else {
+                showToast("Failed to clear logs. Please try again.", "error");
             }
         }
     });

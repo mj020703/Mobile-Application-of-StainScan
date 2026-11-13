@@ -1880,8 +1880,8 @@ input:checked + .slider:before {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.8px;
-    color: var(--text-muted);
-    font-weight: 600;
+    color: var(--color-primary);
+    font-weight: 700;
 }
 
 .header-titles h1 {
@@ -2068,8 +2068,103 @@ input:checked + .slider:before {
 .simple-bar-chart {
     display: flex;
     flex-direction: column;
-    gap: 15px;
+    gap: 16px;
     margin-top: 15px;
+}
+
+.bar-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.bar-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12.5px;
+}
+
+.bar-lbl {
+    color: var(--text-color, #e2e8f0);
+    font-weight: 500;
+}
+
+.bar-val {
+    color: var(--text-muted, #94a3b8);
+    font-weight: 600;
+    font-size: 12px;
+}
+
+.bar-track-wrap {
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.bar-fill-indicator {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* CNN Image Model Metrics List */
+.metrics-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 15px;
+}
+
+.metric-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 11px 16px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.metric-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+.metric-item .metric-label {
+    font-size: 13px;
+    color: var(--text-color, #e2e8f0);
+    font-weight: 500;
+}
+
+.metric-item .metric-val {
+    font-family: var(--font-heading, 'Outfit', sans-serif);
+    font-size: 14.5px;
+    font-weight: 700;
+}
+
+.metric-item.metric-item-highlight {
+    background: rgba(249, 115, 22, 0.06);
+    border: 1px solid rgba(249, 115, 22, 0.2);
+}
+
+.text-emerald {
+    color: #10b981 !important;
+}
+
+.text-amber {
+    color: #f59e0b !important;
+}
+
+.text-violet {
+    color: #8b5cf6 !important;
+}
+
+.text-cyan {
+    color: #06b6d4 !important;
 }
 
 /* Table styling */

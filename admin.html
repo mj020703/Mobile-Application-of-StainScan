@@ -18,7 +18,7 @@
     <!-- Font Awesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="style.css?v=3.7">
+    <link rel="stylesheet" href="style.css?v=3.8">
 </head>
 
 <body class="admin-portal-body">
@@ -146,7 +146,7 @@
                         <div class="dashboard-card">
                             <div class="card-title-row">
                                 <h3>Stain Classifications Distribution</h3>
-                                <p>Ratio of identified fabric stains logged by the mobile application.</p>
+                                <p>Breakdown of identified fabric stains logged by mobile users.</p>
                             </div>
                             <div class="simple-bar-chart" id="adminStainChart">
                                 <!-- Dynamic bars rendering -->
@@ -156,20 +156,24 @@
                         <div class="dashboard-card">
                             <div class="card-title-row">
                                 <h3>CNN Image Model Metrics</h3>
-                                <p>Accuracy profiles of convolution filter models.</p>
+                                <p>Validation accuracy profiles of the MobileNetV2 classifier head.</p>
                             </div>
                             <div class="metrics-list">
                                 <div class="metric-item">
-                                    <span>Mud Classification Accuracy</span>
-                                    <strong>94.2%</strong>
+                                    <span class="metric-label">Mud Classification Accuracy</span>
+                                    <strong class="metric-val text-emerald">100.0%</strong>
                                 </div>
                                 <div class="metric-item">
-                                    <span>Used Cooking Oil Accuracy</span>
-                                    <strong>91.8%</strong>
+                                    <span class="metric-label">Used Cooking Oil Accuracy</span>
+                                    <strong class="metric-val text-amber">99.17%</strong>
                                 </div>
                                 <div class="metric-item">
-                                    <span>Black Ballpen Ink Accuracy</span>
-                                    <strong>88.5%</strong>
+                                    <span class="metric-label">Black Ballpen Ink Accuracy</span>
+                                    <strong class="metric-val text-violet">99.17%</strong>
+                                </div>
+                                <div class="metric-item metric-item-highlight">
+                                    <span class="metric-label"><strong>Overall Model Validation Accuracy</strong></span>
+                                    <strong class="metric-val text-cyan">99.44%</strong>
                                 </div>
                             </div>
                         </div>
@@ -295,7 +299,7 @@
     <div class="toast-container" id="toastContainer"></div>
 
     <!-- Admin JavaScript -->
-    <script src="admin.js?v=3.0"></script>
+    <script src="admin.js?v=3.1"></script>
 </body>
 
 </html>
