@@ -341,10 +341,11 @@ def normalize_fabric_illumination(img_rgb: np.ndarray, fabric_color: str = "Whit
 
 def detect_fabric_color_from_image(pil_image: Image.Image, cnn_fab_idx: int = None, cnn_fab_conf: float = 0.0) -> str:
     """
-    Table-Invariant Garment Substrate Fabric Detection (White Cotton vs Heather Grey Cotton):
-    Segments out external background/table surfaces (gray < 115) and evaluates unstained
-    garment substrate luminance (g_p80, crop_fab_p50) and heather weave texture.
-    Prevents external surfaces (dark desks, table grain) and large dark stains from biasing fabric detection.
+    Robust Lighting-Invariant Garment Substrate Detection:
+    Combines the trained CNN multi-head fabric classifier with illumination-invariant
+    textural and colorimetric analysis of the unsoiled garment substrate.
+    Correctly differentiates White Cotton vs Heather Grey Cotton across cool daylight,
+    warm incandescent indoor lighting, deep shadows, and high-exposure angles.
     """
     try:
         im = ImageOps.exif_transpose(pil_image).convert("RGB")
@@ -353,47 +354,56 @@ def detect_fabric_color_from_image(pil_image: Image.Image, cnn_fab_idx: int = No
         
         if CV2_AVAILABLE and cv2 is not None:
             gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-            lap_full = cv2.Laplacian(gray, cv2.CV_64F)
         else:
             gray = (0.299 * arr[:, :, 0] + 0.587 * arr[:, :, 1] + 0.114 * arr[:, :, 2]).astype(np.uint8)
-            lap_full = np.zeros_like(gray, dtype=float)
 
-        # 1. Garment segmentation: isolate fabric substrate from dark table (< 115)
-        garment_mask = (gray >= 115)
+        # 1. Garment segmentation: isolate fabric substrate from dark external tables (< 100)
+        garment_mask = (gray >= 100)
         if np.sum(garment_mask) < 200:
             garment_mask = np.ones_like(gray, dtype=bool)
 
-        garment_gray = gray[garment_mask]
-        g_p80 = float(np.percentile(garment_gray, 80))
-        g_p50 = float(np.percentile(garment_gray, 50))
+        garment_pixels = gray[garment_mask]
+        g_p80 = float(np.percentile(garment_pixels, 80))
+        g_p50 = float(np.percentile(garment_pixels, 50))
 
-        # 2. Viewfinder center crop
-        c_size = min(h, w)
-        cy, cx = h // 2, w // 2
-        hs = c_size // 2
-        crop_gray = gray[cy - hs : cy + hs, cx - hs : cx + hs]
-        crop_p60 = float(np.percentile(crop_gray, 60))
-        crop_p98 = float(np.percentile(crop_gray, 98))
-        fab_mask = (crop_gray >= crop_p60) & (crop_gray <= crop_p98)
-        if np.sum(fab_mask) < 50:
-            fab_mask = (crop_gray >= crop_p60)
-        crop_fab_p50 = float(np.median(crop_gray[fab_mask])) if np.sum(fab_mask) > 0 else 180.0
+        # 2. High-confidence CNN Fabric Head (Convolutional Weave Invariance)
+        if cnn_fab_idx is not None and cnn_fab_conf >= 75.0:
+            if cnn_fab_idx == 1:  # Grey Cotton
+                # Grey cotton unless blown-out pure white throughout (g_p50 > 220)
+                if g_p50 <= 220.0:
+                    return "Grey Cotton"
+            elif cnn_fab_idx == 0:  # White Cotton
+                # White cotton unless deeply dark throughout (g_p80 < 140)
+                if g_p80 >= 140.0:
+                    return "White Cotton"
 
-        # 3. Substrate Decision:
-        # Solid white cotton highlight luminance is >= 189.0 (191.0 - 255.0 across all physical user garments)
-        # Heather grey cotton has highlight luminance <= 186.0 (143.0 - 186.0)
-        if g_p80 >= 189.0 or crop_fab_p50 >= 189.0:
+        # 3. Optical substrate analysis for moderate/uncertain CNN predictions
+        corner_h, corner_w = max(10, h // 6), max(10, w // 6)
+        corners = [
+            gray[:corner_h, :corner_w],
+            gray[:corner_h, -corner_w:],
+            gray[-corner_h:, :corner_w],
+            gray[-corner_h:, -corner_w:]
+        ]
+        valid_corners = [c for c in corners if np.mean(c) >= 100]
+        if valid_corners:
+            corner_median = float(np.median(np.concatenate([c.ravel() for c in valid_corners])))
+        else:
+            corner_median = g_p50
+
+        # Solid white cotton highlights typically reach >= 195 even under normal room light
+        if corner_median >= 195.0 or g_p80 >= 210.0:
             return "White Cotton"
-
-        # If CNN fabric head is confident Grey Cotton on mid-tone fabric
-        if cnn_fab_idx == 1 and cnn_fab_conf >= 70.0 and g_p80 <= 187.0:
+        elif corner_median <= 170.0 or g_p80 <= 180.0:
             return "Grey Cotton"
 
-        # CNN White Cotton head agreement
-        if cnn_fab_idx == 0 and cnn_fab_conf >= 70.0:
+        # Mid-tone ambiguity (170-195): defer to CNN head if available
+        if cnn_fab_idx == 1:
+            return "Grey Cotton"
+        elif cnn_fab_idx == 0:
             return "White Cotton"
 
-        return "Grey Cotton" if g_p80 <= 187.0 else "White Cotton"
+        return "White Cotton" if corner_median >= 185.0 else "Grey Cotton"
     except Exception as e:
         print(f"[Fabric Detection] Warning in substrate check: {e}")
         return "White Cotton"
@@ -451,19 +461,22 @@ def analyze_stain_colorimetry(pil_image: Image.Image, fabric_color: str = "White
     min_gray = float(np.min(crop_gray))
     p5_gray = float(np.percentile(crop_gray[stain_mask > 0], 5)) if num_stain_pixels > 0 else min_gray
 
-    # 1. Black Ballpen Ink: deep blue/black hue clustering (Hue <= 15 or 140 <= Hue <= 180), low sat, dark density
+    # 1. Black Ballpen Ink:
+    # a) Synthetic blue/violet dye (Hue 110-180, S >= 28, V < 90)
+    # Require S >= 28 to reject cool daylight uncolored shadows on grey fabric
+    blue_ink_pixels = ((h_chan >= 110) & (h_chan <= 180) & (s_chan >= 28) & (v_chan < 90))
+    blue_ink_count = int(np.sum(blue_ink_pixels & (stain_mask > 0)))
+    blue_ink_ratio = blue_ink_count / max(1, num_stain_pixels)
+
+    # b) Carbon black ink lines (tight hue clustering, deep darkness, low saturation)
     ink_hue_clustering = ((h_chan <= 15) | (h_chan >= 140))
-    dark_pixels = (crop_gray < 55) & (v_chan < 65)
-    ink_pixels_mask = ink_hue_clustering & dark_pixels & (s_chan < 110)
+    dark_pixels = (crop_gray < 50) & (v_chan < 60)
+    ink_pixels_mask = ink_hue_clustering & dark_pixels & (s_chan < 80)
 
     ink_pixel_count = int(np.sum(ink_pixels_mask & (stain_mask > 0)))
     dark_pixel_count = int(np.sum(dark_pixels & (stain_mask > 0)))
     ink_density = ink_pixel_count / max(1, num_stain_pixels)
     dark_density = dark_pixel_count / max(1, num_stain_pixels)
-
-    blue_ink_pixels = ((h_chan >= 110) & (h_chan <= 180) & (s_chan > 20) & (v_chan < 100))
-    blue_ink_count = int(np.sum(blue_ink_pixels & (stain_mask > 0)))
-    blue_ink_ratio = blue_ink_count / max(1, num_stain_pixels)
 
     # 2. Used Cooking Oil: amber/gold hue signatures (12 <= Hue <= 48, Sat >= 28, Val >= 50)
     # Saturation threshold >= 28 strictly prevents neutral/warm white cotton fabric from being counted as amber oil
@@ -496,7 +509,8 @@ def analyze_stain_colorimetry(pil_image: Image.Image, fabric_color: str = "White
         dilated = cv2.dilate(stain_mask.astype(np.uint8), kernel, iterations=2)
         halo_ring = (dilated > 0) & (~stain_mask)
         if np.sum(halo_ring) > 20:
-            halo_amber = (h_chan[halo_ring] >= 12) & (h_chan[halo_ring] <= 48) & (s_chan[halo_ring] >= 6)
+            # Genuine oil halo requires visible saturation >= 22 (rejects warm fabric background)
+            halo_amber = (h_chan[halo_ring] >= 12) & (h_chan[halo_ring] <= 48) & (s_chan[halo_ring] >= 22)
             halo_amber_ratio = float(np.mean(halo_amber))
             sobelx = cv2.Sobel(crop_gray, cv2.CV_64F, 1, 0, ksize=3)
             sobely = cv2.Sobel(crop_gray, cv2.CV_64F, 0, 1, ksize=3)
@@ -504,8 +518,8 @@ def analyze_stain_colorimetry(pil_image: Image.Image, fabric_color: str = "White
             boundary_grad = float(np.mean(edge_grad[halo_ring]))
             halo_drop = float(np.mean(p90 - crop_gray[halo_ring]))
 
-            # Halo is translucent lipid diffusion if outer ring has amber/warmth, smooth edge, and gentle luminance drop
-            if (halo_amber_ratio > 0.15) and (boundary_grad < 35.0) and (halo_drop < 20.0):
+            # Halo is translucent lipid diffusion if outer ring has amber/warmth, smooth edge, gentle luminance drop, and low deep opacity
+            if (halo_amber_ratio > 0.15) and (boundary_grad < 35.0) and (halo_drop < 20.0) and (deep_opaque_ratio < 0.35):
                 has_translucent_lipid_halo = True
 
     # Warmth (Red - Blue)
@@ -523,6 +537,7 @@ def analyze_stain_colorimetry(pil_image: Image.Image, fabric_color: str = "White
         "dark_pixel_count": int(dark_pixel_count),
         "ink_density": round(float(ink_density), 4),
         "dark_density": round(float(dark_density), 4),
+        "blue_ink_count": int(blue_ink_count),
         "blue_ink_ratio": round(float(blue_ink_ratio), 4),
         "amber_ratio": round(float(amber_ratio), 4),
         "mean_val_drop": round(float(mean_val_drop), 2),
@@ -540,16 +555,16 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
     Comprehensive Multi-Class HSV Colorimetric Guardrail:
     Executes deterministic rules right after CNN inference:
       1. Black Ballpen Ink Guardrail:
-         Condition: If stain's cropped pixel region contains deep blue/black hue clustering
-         (Hue <= 15 or 140 <= Hue <= 180, very low saturation, high dark-pixel density),
-         force-override prediction to Black Ballpen Ink. Prevents sharp ink lines from being misclassified as mud.
+         Condition: If stain contains deep blue/violet dye tones (Hue in [110, 180], S >= 28)
+         or tight carbon black lines with low luminance, retain or override to Black Ballpen Ink.
+         Resolves split predictions on small ink marks to prevent false OOD rejections.
       2. Used Cooking Oil Guardrail:
-         Condition: If stain exhibits amber/gold hue signatures (15 <= Hue <= 45, moderate-to-high value)
-         surrounded by smooth translucent lipid diffusion rings/grease halos, force-override to Used Cooking Oil.
-         Ensures used/dark cooking oil with burnt sediment is never mistaken for mud.
+         Condition: If stain exhibits amber/gold hue signatures or translucent lipid diffusion
+         (charcoal translucent absorption on Grey Cotton with absence of earthy mineral soil crust),
+         retain or override to Used Cooking Oil.
       3. Mud Guardrail:
          Condition: Retain Mud only if color profile matches earthy brown/grey soil signatures with
-         high particle opacity, irregular crust boundaries, and an absence of blue ink tones or amber lipid halos.
+         genuine mineral chrominance (amber_ratio >= 12% or warmth_diff >= 8.0) and high particle opacity.
     """
     try:
         metrics = analyze_stain_colorimetry(pil_image, fabric_color)
@@ -560,6 +575,7 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         dark_count = metrics["dark_pixel_count"]
         ink_density = metrics["ink_density"]
         dark_density = metrics["dark_density"]
+        blue_ink_count = metrics.get("blue_ink_count", 0)
         blue_ink_ratio = metrics["blue_ink_ratio"]
         amber_ratio = metrics["amber_ratio"]
         mean_drop = metrics["mean_val_drop"]
@@ -568,6 +584,7 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         has_lipid_halo = metrics["has_translucent_lipid_halo"]
         crust_irregularity = metrics["crust_irregularity"]
         warmth_diff = metrics["warmth_diff"]
+        num_stain_pixels = metrics["num_stain_pixels"]
 
         is_white = "White" in fabric_color
         is_grey = "Grey" in fabric_color
@@ -577,56 +594,80 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
         # ─────────────────────────────────────────────────────────────────
         # 1. Genuine Black Ballpen Ink:
         #    Requires genuine blue/indigo dye tones OR deep neutral carbon black lines
-        #    with dark density, low luminance (min_gray <= 35, p5_gray <= 55),
-        #    and complete absence of lipid halo. Tolerates ambient room lighting warmth (amber_ratio < 0.18).
-        has_ink_clustering = (
-            (blue_ink_ratio >= 0.005 and ink_count >= 50) or
-            (ink_count >= 80 and min_gray <= 35 and p5_gray <= 55 and amber_ratio < 0.18 and ink_density >= 0.002) or
-            (ink_count >= 150 and dark_density >= 0.03 and min_gray <= 35 and amber_ratio < 0.18)
-        ) and (not has_lipid_halo)
-
-        # 2. Genuine Used Cooking Oil:
-        #    Translucent lipid absorption without deep 3D opaque crusting
-        oil_amber_thresh = 0.12 if is_grey else 0.20
-        is_cooking_oil = (
-            (has_lipid_halo or (amber_ratio >= oil_amber_thresh and mean_drop < 55.0)) and
-            (not has_ink_clustering) and
-            (deep_opaque_ratio < 0.40)
+        #    with dark density, low luminance, absence of amber soil chrominance, and NOT a broad liquid soak
+        has_blue_ink_dye = (blue_ink_ratio >= 0.015 and blue_ink_count >= 15 and min_gray <= 50.0 and amber_ratio < 0.08) or (blue_ink_count >= 30 and min_gray <= 40.0 and amber_ratio < 0.08)
+        has_carbon_ink_lines = (
+            ink_count >= 80 and min_gray <= 30.0 and p5_gray <= 55.0 and
+            amber_ratio < 0.08 and warmth_diff <= 2.0 and ink_density >= 0.005 and
+            num_stain_pixels < 40000
         )
+        is_genuine_ink = (has_blue_ink_dye or has_carbon_ink_lines) and (not has_lipid_halo) and (amber_ratio < 0.10)
 
-        # 3. Genuine Mud Crust:
-        #    High 3D particle opacity, substantial luminance drop, irregular crust boundary,
-        #    and absence of genuine ink strokes or lipid diffusion halo.
-        is_soil_crust = (
-            (crust_irregularity >= 0.82) and
-            (deep_opaque_ratio >= 0.18 or mean_drop >= 45.0) and
-            (amber_ratio >= 0.03 or opaque_ratio >= 0.30) and
-            (not has_ink_clustering) and
+        # 2. Genuine Mud Crust:
+        #    Requires real earthy/clay mineral chrominance (amber/clay/warmth) AND high 3D particle opacity
+        has_soil_chroma = (amber_ratio >= 0.10) or (warmth_diff >= 6.0 and amber_ratio >= 0.05) or (amber_ratio >= 0.07 and deep_opaque_ratio >= 0.45)
+        is_genuine_soil_crust = (
+            has_soil_chroma and
+            (deep_opaque_ratio >= 0.35 or opaque_ratio >= 0.60) and
+            (mean_drop >= 45.0) and
+            (crust_irregularity >= 0.70) and
+            (not is_genuine_ink) and
             (not has_lipid_halo)
         )
+
+        # 3. Genuine Used Cooking Oil:
+        #    Translucent lipid absorption without deep 3D opaque crusting
+        is_genuine_oil = (
+            (has_lipid_halo or (is_white and amber_ratio >= 0.05 and mean_drop < 55.0) or (is_grey and not has_soil_chroma and deep_opaque_ratio < 0.55)) and
+            (not is_genuine_ink) and
+            (not is_genuine_soil_crust)
+        )
+
+        # ─────────────────────────────────────────────────────────────────
+        # Split Prediction Resolution (prevents false OOD when CNN is uncertain)
+        # ─────────────────────────────────────────────────────────────────
+        raw_conf = float(np.max(cnn_probs))
+        if raw_conf < 0.85:
+            if is_genuine_ink:
+                reason = f"Black Ballpen Ink Guardrail: Synthetic ink dye verified overriding split CNN."
+                p_ink = 0.98
+                p_oil = 0.01
+                p_mud = 0.01
+                return "Black Ballpen Ink", np.array([p_ink, p_oil, p_mud]), 0, True, reason, metrics
+            elif is_genuine_soil_crust:
+                reason = f"Mud Guardrail: High opacity earthy soil crust confirmed overriding split CNN."
+                p_mud = 0.98
+                p_ink = 0.01
+                p_oil = 0.01
+                return "Mud", np.array([p_ink, p_oil, p_mud]), 2, True, reason, metrics
+            elif has_lipid_halo or (amber_ratio >= 0.06 and mean_drop < 55.0):
+                reason = f"Used Cooking Oil Guardrail: Lipid diffusion confirmed overriding split CNN."
+                p_oil = 0.98
+                p_ink = 0.01
+                p_mud = 0.01
+                return "Used Cooking Oil", np.array([p_ink, p_oil, p_mud]), 1, True, reason, metrics
 
         # ─────────────────────────────────────────────────────────────────
         # Deterministic Guardrail Execution:
         # ─────────────────────────────────────────────────────────────────
         # Case A: CNN predicted Black Ballpen Ink
         if cnn_label == "Black Ballpen Ink":
-            if not has_ink_clustering and blue_ink_ratio < 0.005:
-                if is_soil_crust or (mean_drop >= 45.0 and crust_irregularity >= 0.82 and (amber_ratio >= 0.03 or opaque_ratio >= 0.30)):
-                    reason = f"Mud Guardrail override: High opacity earthy soil crust detected ({amber_ratio:.2%}) with absence of genuine ink strokes overriding Black Ballpen Ink on {fabric_color}."
-                    p_mud = max(0.96, float(np.max(cnn_probs)))
-                    p_ink = float(cnn_probs[0]) * 0.04
-                    p_oil = float(cnn_probs[1]) * 0.04
-                    new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
-                    return "Mud", new_probs, 2, True, reason, metrics
-                elif is_cooking_oil or (deep_opaque_ratio < 0.20 and mean_drop < 48.0):
-                    reason = f"Used Cooking Oil Guardrail: Translucent lipid absorption with absence of ink strokes overriding Black Ballpen Ink on {fabric_color}."
-                    p_oil = max(0.96, float(np.max(cnn_probs)))
-                    p_ink = float(cnn_probs[0]) * 0.04
-                    p_mud = float(cnn_probs[2]) * 0.04
-                    new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
-                    return "Used Cooking Oil", new_probs, 1, True, reason, metrics
+            if is_genuine_soil_crust:
+                reason = f"Mud Guardrail override: High opacity earthy soil crust detected ({amber_ratio:.2%}) overriding Black Ballpen Ink on {fabric_color}."
+                p_mud = max(0.96, float(np.max(cnn_probs)))
+                p_ink = float(cnn_probs[0]) * 0.04
+                p_oil = float(cnn_probs[1]) * 0.04
+                new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
+                return "Mud", new_probs, 2, True, reason, metrics
+            elif has_lipid_halo or (amber_ratio >= 0.15 and mean_drop < 50.0):
+                reason = f"Used Cooking Oil Guardrail: Translucent lipid halo overriding Black Ballpen Ink on {fabric_color}."
+                p_oil = max(0.96, float(np.max(cnn_probs)))
+                p_ink = float(cnn_probs[0]) * 0.04
+                p_mud = float(cnn_probs[2]) * 0.04
+                new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
+                return "Used Cooking Oil", new_probs, 1, True, reason, metrics
             # Genuine ink verified
-            reason = f"Black Ballpen Ink Guardrail: Deep blue/black ink clustering verified (ink_density={ink_density:.4f}, ink_count={ink_count}, blue_ink={blue_ink_ratio:.4f})."
+            reason = f"Black Ballpen Ink Guardrail: Deep blue/black ink clustering verified."
             p_ink = max(0.96, float(np.max(cnn_probs)))
             p_oil = float(cnn_probs[1]) * 0.04
             p_mud = float(cnn_probs[2]) * 0.04
@@ -635,9 +676,17 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
 
         # Case B: CNN predicted Mud
         if cnn_label == "Mud":
-            # On Grey Cotton, translucent liquid absorption with amber tone is cooking oil, not solid mud crust
-            if is_grey and (is_cooking_oil or (amber_ratio >= 0.50 and deep_opaque_ratio < 0.40)) and not has_ink_clustering:
-                reason = f"Used Cooking Oil Guardrail: Translucent amber lipid diffusion detected on {fabric_color} (amber={amber_ratio:.2%}) overriding Mud."
+            # Override to ink only if strong verified ink strokes and complete absence of mud soil
+            if is_genuine_ink and (ink_count >= 80 or blue_ink_count >= 80) and amber_ratio < 0.06:
+                reason = f"Black Ballpen Ink Guardrail: Synthetic ink dye detected overriding Mud on {fabric_color}."
+                p_ink = max(0.96, float(np.max(cnn_probs)))
+                p_oil = float(cnn_probs[1]) * 0.04
+                p_mud = float(cnn_probs[2]) * 0.04
+                new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
+                return "Black Ballpen Ink", new_probs, 0, True, reason, metrics
+            # If stain lacks earthy soil chrominance and is translucent, it is cooking oil
+            if (not has_soil_chroma and deep_opaque_ratio < 0.50) or (has_lipid_halo and deep_opaque_ratio < 0.35):
+                reason = f"Used Cooking Oil Guardrail: Translucent lipid absorption overriding Mud on {fabric_color}."
                 p_oil = max(0.96, float(np.max(cnn_probs)))
                 p_ink = float(cnn_probs[0]) * 0.04
                 p_mud = float(cnn_probs[2]) * 0.04
@@ -653,22 +702,24 @@ def verify_and_disambiguate_stain_physics(pil_image: Image.Image, cnn_label: str
 
         # Case C: CNN predicted Used Cooking Oil
         if cnn_label == "Used Cooking Oil":
-            # Override to ink if genuine ink strokes are present AND NO lipid diffusion halo
-            if has_ink_clustering and not has_lipid_halo and (ink_count >= 80 or blue_ink_ratio >= 0.005):
-                reason = f"Black Ballpen Ink Guardrail: Ink strokes detected ({ink_count} px) overriding Cooking Oil."
+            # Override to ink only if genuine ink with split/low CNN oil confidence
+            if is_genuine_ink and float(cnn_probs[1]) < 0.85:
+                reason = f"Black Ballpen Ink Guardrail: Ink strokes detected overriding Cooking Oil."
                 p_ink = max(0.96, float(np.max(cnn_probs)))
                 p_oil = float(cnn_probs[1]) * 0.04
                 p_mud = float(cnn_probs[2]) * 0.04
                 new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
                 return "Black Ballpen Ink", new_probs, 0, True, reason, metrics
-            if is_soil_crust and (deep_opaque_ratio >= 0.40 or opaque_ratio >= 0.75) and (not has_lipid_halo):
+            # Override to Mud only if genuine soil crust with true earthy chrominance
+            if is_genuine_soil_crust and (deep_opaque_ratio >= 0.45 or opaque_ratio >= 0.75):
                 reason = f"Mud Guardrail override: High opacity earthy soil crust detected ({amber_ratio:.2%}) overriding Cooking Oil."
                 p_mud = max(0.96, float(np.max(cnn_probs)))
                 p_ink = float(cnn_probs[0]) * 0.04
                 p_oil = float(cnn_probs[1]) * 0.04
                 new_probs = np.array([p_ink, p_oil, p_mud]) / (p_ink + p_oil + p_mud)
                 return "Mud", new_probs, 2, True, reason, metrics
-            reason = f"Used Cooking Oil verified: Amber/gold lipid signature confirmed ({amber_ratio:.2%})."
+            # Retain Used Cooking Oil
+            reason = f"Used Cooking Oil verified: Translucent lipid signature confirmed ({amber_ratio:.2%})."
             p_oil = max(0.96, float(np.max(cnn_probs)))
             p_ink = float(cnn_probs[0]) * 0.04
             p_mud = float(cnn_probs[2]) * 0.04
@@ -2082,7 +2133,7 @@ def health_check():
     global model, LOADED_MODEL_FILE
     return jsonify({
         "status": "healthy" if model is not None else "ready",
-        "version": "v3.24-robust-lighting-fabric-invariance-20261112",
+        "version": "v3.25-robust-lighting-and-stain-physics-20261113",
         "model_loaded": model is not None,
         "model_file": LOADED_MODEL_FILE or MODEL_PATH,
         "configured_model_path": MODEL_PATH,
